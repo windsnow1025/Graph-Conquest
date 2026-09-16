@@ -228,7 +228,7 @@ function* battleAllocatePhase(
 
       const context: DecisionContext = {
         type: "battleAllocate", army, remaining, enemyArmy: target,
-        roundProgress: battle.round / battle.maxRounds, isAttacker, unitsNeeded: killNeeded,
+        attackProgress: 1 - battle.getRemainingAttacks(army) / battle.maxArmyAttacks, isAttacker, unitsNeeded: killNeeded,
       };
       const state = encodeState(game, playerIdx, context);
       const pred = model.predict(state);
@@ -282,7 +282,7 @@ function* battleLoop(
   game: GameSystem, model: NNModel, battle: Battle, playerIdx: number, opts: TurnOptions,
 ): Generator<void> {
   const eps = opts.epsilon ?? 0;
-  const maxIter = battle.maxRounds * 4 + 8;
+  const maxIter = battle.maxArmyAttacks * 4 + 8;
   let iter = 0;
 
   while (battle.result === BattleResult.Ongoing) {
@@ -290,8 +290,9 @@ function* battleLoop(
     if (battle.phase === BattlePhase.AttackerTurn) {
       if (battle.actedArmies.size === 0) {
         const targetNodeIdx = NODE_ORDER.indexOf(battle.targetLocation);
+        const remainingAttacks = Math.min(...battle.attackerArmies.map((a) => battle.getRemainingAttacks(a)));
         const context: DecisionContext = {
-          type: "battleRetreat", targetNodeIdx, roundProgress: battle.round / battle.maxRounds,
+          type: "battleRetreat", targetNodeIdx, attackProgress: 1 - remainingAttacks / battle.maxArmyAttacks,
         };
         const state = encodeState(game, playerIdx, context);
         const pred = model.predict(state);

@@ -116,7 +116,7 @@ export interface BattleAllocateContext {
   army: Army;
   remaining: number;
   enemyArmy: Army;
-  roundProgress: number;
+  attackProgress: number;
   isAttacker: boolean;
   unitsNeeded: number;
 }
@@ -124,7 +124,7 @@ export interface BattleAllocateContext {
 export interface BattleRetreatContext {
   type: "battleRetreat";
   targetNodeIdx: number;
-  roundProgress: number;
+  attackProgress: number;
 }
 
 export type DecisionContext =
@@ -180,7 +180,7 @@ export function encodeState(
   buf[offset++] = game.upkeepRate / 0.20;
   buf[offset++] = game.turnCount / 100;
   buf[offset++] = game.maxTurns / 100;
-  buf[offset++] = game.maxBattleRounds / 20;
+  buf[offset++] = game.maxArmyAttacks / 20;
 
   // ─── 2. Unit type stats (3 × 6 = 18) ───
   for (const typeName of UNIT_TYPES) {
@@ -407,20 +407,20 @@ export function encodeState(
     const enemyCost = game.unitStatsMap[enemy.unitType].cost;
     buf[offset++] = enemy.units.length / (100 / enemyCost);
     buf[offset++] = encodeArmyHp(enemy);
-    buf[offset++] = context.roundProgress;
+    buf[offset++] = context.attackProgress;
     buf[offset++] = context.isAttacker ? 1 : 0;
     buf[offset++] = context.unitsNeeded / 500;
   } else {
     offset += BATTLE_ALLOCATE_CONTEXT;
   }
 
-  // ── battleRetreat (17): targetNode[16] + roundProgress[1] ──
+  // ── battleRetreat (17): targetNode[16] + attackProgress[1] ──
   if (context?.type === "battleRetreat") {
     if (context.targetNodeIdx >= 0 && context.targetNodeIdx < NUM_NODES) {
       buf[offset + context.targetNodeIdx] = 1;
     }
     offset += 16;
-    buf[offset++] = context.roundProgress;
+    buf[offset++] = context.attackProgress;
   } else {
     offset += BATTLE_RETREAT_CONTEXT;
   }

@@ -123,7 +123,7 @@ function randomBattleAllocate(battle: Battle, isAttacker: boolean): void {
 }
 
 function randomBattleLoop(game: GameSystem, battle: Battle): void {
-  const maxIter = battle.maxRounds * 4 + 8;
+  const maxIter = battle.maxArmyAttacks * 4 + 8;
   let iter = 0;
   while (battle.result === BattleResult.Ongoing) {
     if (++iter > maxIter) {
