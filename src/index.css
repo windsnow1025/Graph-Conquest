@@ -1,0 +1,90 @@
+/* Global */
+html {
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+}
+
+/* Customize */
+.flex-normal {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.flex-center {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.flex-center-nowrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.flex-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.flex-between-nowrap {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.flex-column {
+  display: flex;
+  flex-direction: column;
+}
+
+.flex-column-center {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.inflex-fill {
+  flex: 1;
+  overflow: auto;
+}
+
+/* Local Scroll */
+.local-scroll-root {
+  display: flex;
+  flex-direction: column;
+  height: 100svh;
+}
+
+.local-scroll-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.local-scroll-unscrollable-x {
+  display: flex;
+  flex-grow: 1;
+  overflow: hidden;
+}
+
+.local-scroll-unscrollable-y {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  overflow: hidden;
+}
+
+.local-scroll-scrollable {
+  flex-grow: 1;
+  overflow: auto;
+}
