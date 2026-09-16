@@ -537,7 +537,7 @@ function App() {
           <Paper elevation={3} sx={{position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)", p: 1, ...overlayPaper}}>
             {battle.result === BattleResult.Ongoing ? (
               <Typography variant="body2" sx={{fontWeight: "bold"}}>
-                Battle at {battle.targetLocation} — Round {battle.round}/{battle.maxRounds} — {
+                Battle at {battle.targetLocation} — Round {battle.round} — {
                   battle.phase === BattlePhase.AttackerTurn ? battle.attackerPlayer.name : battle.defenderPlayer.name
                 }'s Turn
               </Typography>
@@ -546,7 +546,7 @@ function App() {
                 {battle.result === BattleResult.AttackerWins && `${battle.attackerPlayer.name} Wins!`}
                 {battle.result === BattleResult.DefenderWins && `${battle.defenderPlayer.name} Wins!`}
                 {battle.result === BattleResult.Retreat && `${battle.attackerPlayer.name} Retreated`}
-                {battle.result === BattleResult.Draw && "Draw (Max Rounds)"}
+                {battle.result === BattleResult.Draw && "Draw (Attacks Exhausted)"}
               </Typography>
             )}
           </Paper>

@@ -86,7 +86,7 @@ npx tsx training/scripts/trainPhase3.ts mix-p2-v1
 
 ## Input Encoding (StateEncoder.ts, 1148 features)
 
-1. **Game config** (5): interestRate/0.10, upkeepRate/0.20, turnCount/100, maxTurns/100, maxBattleRounds/20
+1. **Game config** (5): interestRate/0.10, upkeepRate/0.20, turnCount/100, maxTurns/100, maxArmyAttacks/20
 2. **Unit type stats** (18): 3 types × 6 stats (attack/9, defend/3, health/20, range/2, speed/2, cost/2)
 3. **Player stats** (21): 3 players (self, opp1, opp2) × 7 (money/200, nodeIncome/68, interest/10, upkeep/20, totalUnits/200, nodeCount/16, defeated)
 4. **Per-node** (880): 16 nodes × 55 (income/10, canRecruit, owner[4], 4 factions × 3 types × 2 (units/(100/cost), avgHp), 3 types × armyCount/4, 3 types × 2 (maxMoves/2, canAttack), distance[16])
@@ -98,8 +98,8 @@ Context blocks:
 - **moveTarget** (39): army info(23) + legal destination mask[16]
 - **battleTarget** (16): attackable node mask[16]
 - **battleSelect** (51): army info(22, zeroed for the done option) + targetNode[16] + selectedPerType[6] + remainingPerType[6] + isDone(1)
-- **battleAllocate** (46): myArmy(22) + enemyArmy(21) + roundProgress + isAttacker + unitsNeeded/500
-- **battleRetreat** (17): targetNode[16] + roundProgress
+- **battleAllocate** (46): myArmy(22) + enemyArmy(21) + attackProgress + isAttacker + unitsNeeded/500
+- **battleRetreat** (17): targetNode[16] + attackProgress
 
 All features centered: value -= 0.5.
 

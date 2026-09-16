@@ -179,7 +179,7 @@ function simpleBattleAllocate(_game: GameSystem, battle: Battle, isAttacker: boo
 }
 
 function simpleBattleLoop(game: GameSystem, battle: Battle): void {
-  const maxIter = battle.maxRounds * 4 + 8;
+  const maxIter = battle.maxArmyAttacks * 4 + 8;
   let iter = 0;
   while (battle.result === BattleResult.Ongoing) {
     if (++iter > maxIter) {
@@ -462,7 +462,7 @@ function* lookaheadBattleAllocate(
         const s = emptySample(playerIdx);
         s.state = encodeState(game, playerIdx, {
           type: "battleAllocate", army, remaining, enemyArmy: target,
-          roundProgress: battle.round / battle.maxRounds, isAttacker, unitsNeeded: killNeeded,
+          attackProgress: 1 - battle.getRemainingAttacks(army) / battle.maxArmyAttacks, isAttacker, unitsNeeded: killNeeded,
         });
         s.killFraction = bestFrac; s.killFracMask = 1;
         s.value = bestQ;
@@ -505,7 +505,7 @@ function* lookaheadBattleAllocate(
 function* lookaheadBattleLoop(
   game: GameSystem, battle: Battle, playerIdx: number, samples: Sample[] | null,
 ): Generator<void> {
-  const maxIter = battle.maxRounds * 4 + 8;
+  const maxIter = battle.maxArmyAttacks * 4 + 8;
   let iter = 0;
   while (battle.result === BattleResult.Ongoing) {
     if (++iter > maxIter) throw new Error(battleStuckReport("lookaheadBattleLoop stuck", battle));
@@ -526,11 +526,12 @@ function* lookaheadBattleLoop(
         const doRetreat = qRetreat > qFight;
 
         if (samples) {
+          const remainingAttacks = Math.min(...battle.attackerArmies.map((a) => battle.getRemainingAttacks(a)));
           const s = emptySample(playerIdx);
           s.state = encodeState(game, playerIdx, {
             type: "battleRetreat",
             targetNodeIdx: NODE_ORDER.indexOf(battle.targetLocation),
-            roundProgress: battle.round / battle.maxRounds,
+            attackProgress: 1 - remainingAttacks / battle.maxArmyAttacks,
           });
           s.battleRetreat = doRetreat ? 1 : 0; s.retreatMask = 1;
           s.value = doRetreat ? qRetreat : qFight;
