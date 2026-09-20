@@ -143,13 +143,6 @@ function App() {
       return;
     }
 
-    // Auto-play defender: Neutral/defeated use simple heuristic
-    if (battle.phase === BattlePhase.DefenderTurn
-      && (battle.defenderPlayer.name === "Neutral" || battle.defenderPlayer.defeated)) {
-      battle.executeNeutralDefenderTurn();
-      update();
-      return;
-    }
     // AI-controlled defender uses their model (NN or greedy)
     if (battle.phase === BattlePhase.DefenderTurn && aiPlayers.has(battle.defenderPlayer.name)) {
       aiDefenderPhase(gameRef.current, battle, gameMode).then(update);

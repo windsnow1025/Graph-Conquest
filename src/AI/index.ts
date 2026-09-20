@@ -69,7 +69,10 @@ export async function aiDefenderPhase(game: GameSystem, battle: Battle, mode: st
     if (nnModel?.isLoaded()) {
       executeNNDefenderPhase(game, nnModel, battle);
     } else {
-      battle.executeNeutralDefenderTurn();
+      // No model: the defender passes
+      for (const army of battle.unactedArmies) {
+        if (battle.canAct(army)) battle.allocateAttack(army, new Map());
+      }
     }
   }
 }

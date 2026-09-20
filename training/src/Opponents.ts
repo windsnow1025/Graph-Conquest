@@ -122,7 +122,7 @@ function randomBattleAllocate(battle: Battle, isAttacker: boolean): void {
   }
 }
 
-function randomBattleLoop(game: GameSystem, battle: Battle): void {
+function randomBattleLoop(battle: Battle): void {
   const maxIter = battle.maxArmyAttacks * 4 + 8;
   let iter = 0;
   while (battle.result === BattleResult.Ongoing) {
@@ -136,12 +136,7 @@ function randomBattleLoop(game: GameSystem, battle: Battle): void {
       }
       randomBattleAllocate(battle, true);
     } else {
-      const defenderIdx = game.players.indexOf(battle.defenderPlayer);
-      if (defenderIdx < 0 || battle.defenderPlayer.defeated) {
-        battle.executeNeutralDefenderTurn();
-      } else {
-        randomBattleAllocate(battle, false);
-      }
+      randomBattleAllocate(battle, false);
     }
   }
 }
@@ -171,7 +166,7 @@ function randomBattlePhase(game: GameSystem): void {
       const battle = game.startBattle(location, selected);
       if (!battle) continue;
 
-      randomBattleLoop(game, battle);
+      randomBattleLoop(battle);
       game.resolveBattle();
 
       attacked = true;

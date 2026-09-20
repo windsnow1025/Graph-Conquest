@@ -305,12 +305,7 @@ function* battleLoop(
       yield* battleAllocatePhase(game, model, battle, playerIdx, true, opts);
     } else {
       const defenderIdx = game.players.indexOf(battle.defenderPlayer);
-
-      if (defenderIdx < 0 || battle.defenderPlayer.defeated) {
-        battle.executeNeutralDefenderTurn();
-      } else {
-        yield* battleAllocatePhase(game, model, battle, defenderIdx, false, opts);
-      }
+      yield* battleAllocatePhase(game, model, battle, defenderIdx, false, opts);
       yield;
     }
   }
@@ -487,10 +482,6 @@ export function executeNNTurn(game: GameSystem, model: NNModel, opts?: TurnOptio
 /** Execute one defender phase using NN model. */
 export function executeNNDefenderPhase(game: GameSystem, model: NNModel, battle: Battle): void {
   const defenderIdx = game.players.indexOf(battle.defenderPlayer);
-  if (defenderIdx < 0 || battle.defenderPlayer.defeated) {
-    battle.executeNeutralDefenderTurn();
-    return;
-  }
   const gen = battleAllocatePhase(game, model, battle, defenderIdx, false, {});
   while (!gen.next().done) { /* drain */ }
 }

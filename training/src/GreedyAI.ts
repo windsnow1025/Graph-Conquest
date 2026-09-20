@@ -42,11 +42,6 @@ function moveLegalMask(game: GameSystem, army: Army): Float32Array {
 
 /** Execute one defender phase using greedy logic. */
 export function greedyDefenderPhase(game: GameSystem, battle: Battle): void {
-  const defIdx = game.players.indexOf(battle.defenderPlayer);
-  if (defIdx < 0 || battle.defenderPlayer.defeated) {
-    battle.executeNeutralDefenderTurn();
-    return;
-  }
   simpleBattleAllocate(game, battle, false);
 }
 
@@ -188,9 +183,7 @@ function simpleBattleLoop(game: GameSystem, battle: Battle): void {
     if (battle.phase === BattlePhase.AttackerTurn) {
       simpleBattleAllocate(game, battle, true);
     } else {
-      const defIdx = game.players.indexOf(battle.defenderPlayer);
-      if (defIdx < 0 || battle.defenderPlayer.defeated) battle.executeNeutralDefenderTurn();
-      else simpleBattleAllocate(game, battle, false);
+      simpleBattleAllocate(game, battle, false);
     }
   }
 }
@@ -547,11 +540,7 @@ function* lookaheadBattleLoop(
       yield* lookaheadBattleAllocate(game, battle, true, playerIdx, samples);
     } else {
       const defIdx = game.players.indexOf(battle.defenderPlayer);
-      if (defIdx < 0 || battle.defenderPlayer.defeated) {
-        battle.executeNeutralDefenderTurn();
-      } else {
-        yield* lookaheadBattleAllocate(game, battle, false, defIdx, samples);
-      }
+      yield* lookaheadBattleAllocate(game, battle, false, defIdx, samples);
       yield;
     }
   }
