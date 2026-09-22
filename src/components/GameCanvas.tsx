@@ -17,6 +17,7 @@ interface GameCanvasProps {
   version: number;
   selectedArmy: Army | null;
   selectedNode: string | null;
+  moveDestinations: Set<string>;
   highlightPulse: Set<Army>;
   highlightSolid: Set<Army>;
   targetPulse: Set<Army>;
@@ -32,7 +33,7 @@ const Army_Radius = 14;
 export const Base_Width = 800;
 export const Base_Height = 720;
 
-function GameCanvas({game, version, selectedArmy, selectedNode, highlightPulse, highlightSolid, targetPulse, attackableLocations, battleAllocationDisplay, battleRemaining, onNodeClick, onArmyClick, onClearSelection}: GameCanvasProps) {
+function GameCanvas({game, version, selectedArmy, selectedNode, moveDestinations, highlightPulse, highlightSolid, targetPulse, attackableLocations, battleAllocationDisplay, battleRemaining, onNodeClick, onArmyClick, onClearSelection}: GameCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const [ready, setReady] = useState(false);
@@ -111,7 +112,7 @@ function GameCanvas({game, version, selectedArmy, selectedNode, highlightPulse, 
     app.stage.addChild(bgHit);
 
     drawEdges(app);
-    const nodePulse = drawNodes(app, game, selectedArmy, selectedNode, attackableLocations, onNodeClick);
+    const nodePulse = drawNodes(app, game, selectedNode, moveDestinations, attackableLocations, onNodeClick);
     const { pulseGraphics: armyPulse, armyPositions } = drawArmies(app, game, selectedArmy, highlightPulse, highlightSolid, targetPulse, onArmyClick);
     if (battleAllocationDisplay.length > 0 || battleRemaining > 0) {
       drawBattleArrows(app, armyPositions, battleAllocationDisplay, battleRemaining, selectedArmy);
@@ -136,7 +137,7 @@ function GameCanvas({game, version, selectedArmy, selectedNode, highlightPulse, 
         app.ticker.remove(tickerFn);
       }
     };
-  }, [ready, version, resizeCount, selectedArmy, selectedNode, highlightPulse, highlightSolid, targetPulse, attackableLocations, battleAllocationDisplay, battleRemaining, game, onNodeClick, onArmyClick, onClearSelection]);
+  }, [ready, version, resizeCount, selectedArmy, selectedNode, moveDestinations, highlightPulse, highlightSolid, targetPulse, attackableLocations, battleAllocationDisplay, battleRemaining, game, onNodeClick, onArmyClick, onClearSelection]);
 
   return <div ref={containerRef} style={{width: "100%", height: "100%", overflow: "hidden"}}/>;
 }
@@ -227,15 +228,12 @@ function drawNodeShape(g: Graphics, type: NodeType, radius: number) {
 function drawNodes(
   app: Application,
   game: GameSystem,
-  selectedArmy: Army | null,
   selectedNode: string | null,
+  moveDestinations: Set<string>,
   attackableLocations: Set<string>,
   onNodeClick: (location: string) => void,
 ): Graphics[] {
   const pulseGraphics: Graphics[] = [];
-  const movableLocations = selectedArmy && !game.currentBattle
-    ? selectedArmy.getMovableLocations(game.gameMap, game.enemyLocations)
-    : [];
 
   for (const [name, node] of Object.entries(mapLayout)) {
     const style = nodeStyles[node.type];
@@ -268,7 +266,7 @@ function drawNodes(
     shape.stroke({width: style.strokeWidth, color: strokeColor});
     nodeContainer.addChild(shape);
 
-    if (movableLocations.includes(name)) {
+    if (moveDestinations.has(name)) {
       const ring = new Graphics();
       drawNodeShape(ring, node.type, style.radius + 5);
       ring.stroke({width: 3, color: 0x4CAF50});
@@ -352,8 +350,8 @@ function drawArmies(
       });
 
       const color = playerColors[player.name] ?? 0x888888;
-      const canMove = army.remainingMoves > 0;
-      const canAtk = army.canAttack;
+      const canMove = army.units.some((unit) => unit.remainingMoves > 0);
+      const canAtk = army.attackCandidates.length > 0;
       const isCurrent = isCurrentPlayer(player);
       const exhausted = isCurrent && !canMove && !canAtk && !game.currentBattle;
 
@@ -419,9 +417,10 @@ function drawArmies(
         armyContainer.addChild(indicators);
       }
 
-      // Unit count
+      // Unit count, with the battle contingent when only part of the army is fighting
+      const battleUnits = army.battleUnits.length;
       const countLabel = new Text({
-        text: `${army.units.length}`,
+        text: battleUnits > 0 && battleUnits < army.units.length ? `${battleUnits}/${army.units.length}` : `${army.units.length}`,
         style: new TextStyle({
           fontSize: 11,
           fill: 0xffffff,
