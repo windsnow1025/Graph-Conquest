@@ -12,11 +12,13 @@ import GameSystem, {type GameSave} from "./lib/GameSystem";
 import Config from "./lib/data/Config";
 import Player from "./lib/Player";
 import Army from "./lib/Army";
+import type Unit from "./lib/Unit";
 import {BattlePhase, BattleResult} from "./lib/Battle";
 import type {DefaultUnitName} from "./lib/data/DefaultUnitStatsMap.ts";
 import DefaultUnitStatsMap from "./lib/data/DefaultUnitStatsMap.ts";
 import GameCanvas, {Base_Width, Base_Height} from "./components/GameCanvas";
 import ModeSelect from "./components/ModeSelect";
+import UnitPicker from "./components/UnitPicker";
 import type {GameMode} from "./components/ModeSelect";
 import mapLayout from "./data/MapLayout";
 import {playerCssColors} from "./data/PlayerColors";
@@ -43,12 +45,11 @@ function App() {
   const [recruitCount, setRecruitCount] = useState(1);
 
   // Army management UI
-  const [splitCount, setSplitCount] = useState(1);
-  const [disbandCount, setDisbandCount] = useState(1);
+  const [selectedUnits, setSelectedUnits] = useState<Set<Unit>>(new Set());
 
   // Pre-battle targeting
   const [battleTarget, setBattleTarget] = useState<string | null>(null);
-  const [battlePickedArmies, setBattlePickedArmies] = useState<Set<Army>>(new Set());
+  const [battlePicked, setBattlePicked] = useState<Map<Army, Unit[]>>(new Map());
 
   // In-battle attack allocation
   const [battleAttackArmy, setBattleAttackArmy] = useState<Army | null>(null);
@@ -72,8 +73,9 @@ function App() {
     setSelectedArmy(null);
     setSelectedPlayer(null);
     setSelectedNode(null);
+    setSelectedUnits(new Set());
     setBattleTarget(null);
-    setBattlePickedArmies(new Set());
+    setBattlePicked(new Map());
   }, []);
 
   const clearBattleAttack = useCallback(() => {
@@ -155,8 +157,8 @@ function App() {
       && battle.attackerArmies.length === 1 && battle.defenderArmies.length === 1) {
       const army = battle.defenderArmies[0];
       const target = battle.attackerArmies[0];
-      if (battle.canAct(army) && battle.getTargetsInRange(army).length > 0) {
-        battle.allocateAttack(army, new Map([[target, army.units.length]]));
+      if (battle.canAct(army)) {
+        battle.allocateAttack(army, new Map([[target, army.battleUnits.length]]));
         clearBattleAttack();
         update();
         return;
@@ -256,7 +258,7 @@ function App() {
     : new Set<Army>();
 
   const battleRemaining = battleAttackArmy
-    ? battleAttackArmy.units.length - [...battleAllocations.values()].reduce((sum, count) => sum + count, 0)
+    ? battleAttackArmy.battleUnits.length - [...battleAllocations.values()].reduce((sum, count) => sum + count, 0)
     : 0;
 
   // --- Click handlers ---
@@ -268,13 +270,13 @@ function App() {
     // Cancel targeting mode
     if (battleTarget) {
       setBattleTarget(null);
-      setBattlePickedArmies(new Set());
+      setBattlePicked(new Map());
       return;
     }
 
     // Move selected army to clicked node
     if (selectedArmy && selectedPlayer === gameRef.current.currentPlayer) {
-      gameRef.current.movePlayerArmy(selectedArmy, location);
+      gameRef.current.movePlayerUnits(selectedArmy, location, [...selectedUnits]);
       clearSelection();
       update();
       return;
@@ -286,7 +288,7 @@ function App() {
       setSelectedPlayer(null);
       setSelectedNode(null);
       setBattleTarget(location);
-      setBattlePickedArmies(new Set());
+      setBattlePicked(new Map());
       return;
     }
 
@@ -294,7 +296,7 @@ function App() {
     setSelectedArmy(null);
     setSelectedPlayer(null);
     setSelectedNode(location);
-  }, [battle, isAITurn, selectedArmy, selectedPlayer, battleTarget, attackableLocations, update, clearSelection]);
+  }, [battle, isAITurn, selectedArmy, selectedPlayer, selectedUnits, battleTarget, attackableLocations, update, clearSelection]);
 
   const handleArmyClick = useCallback((army: Army, player: Player) => {
     if (isAITurn) return;
@@ -325,10 +327,10 @@ function App() {
     const current = g.currentPlayer;
     if (battleTarget && player === current) {
       if (!armiesInRange.has(army)) return;
-      setBattlePickedArmies((prev) => {
-        const next = new Set(prev);
+      setBattlePicked((prev) => {
+        const next = new Map(prev);
         if (next.has(army)) next.delete(army);
-        else next.add(army);
+        else next.set(army, army.attackCandidates);
         return next;
       });
       return;
@@ -341,38 +343,37 @@ function App() {
         setSelectedPlayer(null);
         setSelectedNode(null);
         setBattleTarget(army.location);
-        setBattlePickedArmies(new Set());
+        setBattlePicked(new Map());
       }
-      return;
-    }
-
-    // Click mergeable army → merge
-    if (selectedArmy && selectedPlayer === current
-      && army !== selectedArmy
-      && army.location === selectedArmy.location
-      && army.unitType === selectedArmy.unitType) {
-      const merged = g.mergePlayerArmies(selectedArmy, army);
-      if (merged) setSelectedArmy(merged);
-      update();
       return;
     }
 
     // Click own army → select it
     setBattleTarget(null);
-    setBattlePickedArmies(new Set());
+    setBattlePicked(new Map());
     setSelectedArmy(army);
     setSelectedPlayer(player);
+    setSelectedUnits(new Set(army.units));
     setSelectedNode(null);
-  }, [battle, isAITurn, battleTarget, battleAttackArmy, battleRemaining, armiesInRange, attackableLocations, selectedArmy, selectedPlayer, update]);
+  }, [battle, isAITurn, battleTarget, battleAttackArmy, battleRemaining, armiesInRange, attackableLocations]);
+
+  // --- Army actions ---
+  const handleDisband = useCallback(() => {
+    if (!selectedArmy) return;
+    gameRef.current.disbandPlayerUnits(selectedArmy, [...selectedUnits]);
+    if (selectedArmy.units.length === 0) clearSelection();
+    else setSelectedUnits(new Set(selectedArmy.units));
+    update();
+  }, [selectedArmy, selectedUnits, update, clearSelection]);
 
   // --- Battle actions ---
   const handleStartBattle = useCallback(() => {
-    if (!battleTarget || battlePickedArmies.size === 0) return;
-    gameRef.current.startBattle(battleTarget, Array.from(battlePickedArmies));
+    if (!battleTarget || battlePicked.size === 0) return;
+    gameRef.current.startBattle(battleTarget, battlePicked);
     clearSelection();
     clearBattleAttack();
     update();
-  }, [battleTarget, battlePickedArmies, update, clearSelection, clearBattleAttack]);
+  }, [battleTarget, battlePicked, update, clearSelection, clearBattleAttack]);
 
   const handleBattleAllocate = useCallback(() => {
     if (!battleAllocTarget) return;
@@ -402,8 +403,8 @@ function App() {
     if (battle.attackerArmies.length !== 1 || battle.defenderArmies.length !== 1) return;
     const army = battle.attackerArmies[0];
     const target = battle.defenderArmies[0];
-    if (battle.canAct(army) && battle.getTargetsInRange(army).length > 0) {
-      battle.allocateAttack(army, new Map([[target, army.units.length]]));
+    if (battle.canAct(army)) {
+      battle.allocateAttack(army, new Map([[target, army.battleUnits.length]]));
     }
     clearBattleAttack();
     update();
@@ -417,20 +418,15 @@ function App() {
 
   const canvasSelectedArmy = battle ? battleAttackArmy : selectedArmy;
 
-  // Mergeable armies: same type, same location, own army selected
-  const mergeableArmies = (!battle && !battleTarget && !isAITurn && selectedArmy && selectedPlayer === currentPlayer)
-    ? new Set(currentPlayer.armies.filter(a => a !== selectedArmy && a.location === selectedArmy.location && a.unitType === selectedArmy.unitType))
-    : new Set<Army>();
-
   const canvasHighlightPulse = battle
     ? (battleAttackArmy ? new Set<Army>() : battleUnacted)
-    : battleTarget ? armiesInRange : mergeableArmies;
+    : battleTarget ? armiesInRange : new Set<Army>();
   const canvasHighlightSolid = battle
     ? new Set([
         ...battleAllocations.keys(),
         ...(battleAllocTarget ? [battleAllocTarget] : []),
       ])
-    : battlePickedArmies;
+    : new Set(battlePicked.keys());
 
   // Recruit conditions
   const canRecruitAtSelected = !battle && !isAITurn && selectedNode !== null
@@ -440,11 +436,20 @@ function App() {
 
   // Own army selected (not in battle)
   const ownArmySelected = !battle && !isAITurn && selectedArmy && selectedPlayer === currentPlayer;
-  // Count state persists across selections and army shrinkage; clamp to the current army's size
-  const splitMax = selectedArmy ? Math.max(1, selectedArmy.units.length - 1) : 1;
-  const splitCountClamped = Math.min(splitCount, splitMax);
-  const disbandMax = selectedArmy ? Math.max(1, selectedArmy.units.length) : 1;
-  const disbandCountClamped = Math.min(disbandCount, disbandMax);
+  // Nodes every selected unit can reach
+  const moveDestinations = ownArmySelected && selectedUnits.size > 0
+    ? new Set(selectedArmy.getMovableLocations(game.gameMap, game.enemyLocations).filter((location) => {
+        const candidates = new Set(selectedArmy.getMoveCandidates(location, game.gameMap, game.enemyLocations));
+        return [...selectedUnits].every((unit) => candidates.has(unit));
+      }))
+    : new Set<string>();
+  const moveHint = selectedUnits.size === 0
+    ? {text: "Select units to move or disband", warning: false}
+    : moveDestinations.size > 0
+      ? {text: `Click a highlighted node to move ${selectedUnits.size} ${selectedUnits.size === 1 ? "unit" : "units"}`, warning: false}
+      : [...selectedUnits].some((unit) => unit.remainingMoves === 0)
+        ? {text: "Some selected units have no moves left", warning: true}
+        : {text: "No node within reach of the selected units", warning: true};
 
   return (
     <Box className="local-scroll-root" sx={{flexDirection: "row"}}>
@@ -454,6 +459,7 @@ function App() {
           version={version}
           selectedArmy={canvasSelectedArmy}
           selectedNode={selectedNode}
+          moveDestinations={moveDestinations}
           highlightPulse={canvasHighlightPulse}
           highlightSolid={canvasHighlightSolid}
           targetPulse={battleTargets}
@@ -551,10 +557,19 @@ function App() {
         {battleTarget && !battle && (() => {
           const pos = getNodeScreenPos(battleTarget);
           if (!pos) return null;
+          const picked = [...battlePicked];
+          const total = picked.reduce((sum, [, units]) => sum + units.length, 0);
+          const ready = picked.length > 0 && picked.every(([, units]) => units.length > 0);
           return (
-            <Paper elevation={3} sx={{position: "absolute", left: pos.left, top: pos.top + 45 * pos.scale, transform: "translateX(-50%)", p: 1, ...overlayPaper, display: "flex", gap: 0.5}}>
-              <Button variant="contained" color="error" size="small" disabled={battlePickedArmies.size === 0} sx={{textTransform: "none"}} onClick={handleStartBattle}>
-                Start Battle ({battlePickedArmies.size})
+            <Paper elevation={3} sx={{position: "absolute", left: pos.left, top: pos.top + 45 * pos.scale, transform: "translateX(-50%)", p: 1, ...overlayPaper, display: "flex", flexDirection: "column", gap: 1, width: 420}}>
+              {picked.map(([army, units]) => (
+                <Box key={`${army.location}|${army.unitType}`}>
+                  <Typography variant="caption" sx={{fontWeight: "bold"}}>{army.unitType} at {army.location}</Typography>
+                  <UnitPicker units={army.attackCandidates} selected={new Set(units)} onChange={(next) => setBattlePicked(prev => new Map(prev).set(army, [...next]))}/>
+                </Box>
+              ))}
+              <Button variant="contained" color="error" size="small" disabled={!ready} sx={{textTransform: "none"}} onClick={handleStartBattle}>
+                Start Battle ({total})
               </Button>
             </Paper>
           );
@@ -576,7 +591,7 @@ function App() {
               <Button size="small" variant="text" sx={{minWidth: 28, p: 0}} onClick={() => setRecruitCount(Math.min(maxRecruit, recruitCountClamped + 1))}>+</Button>
               <Button
                 variant="contained" size="small" sx={{textTransform: "none", width: 72}}
-                disabled={!currentPlayer.canBuy(unitType, recruitCountClamped) || game.countArmiesOfTypeAtLocation(currentPlayer, unitType, selectedNode!) >= game.maxArmiesPerTypeAtNode(selectedNode!)}
+                disabled={!currentPlayer.canBuy(unitType, recruitCountClamped)}
                 onClick={() => { gameRef.current.recruitPlayerArmy(unitType, selectedNode!, recruitCountClamped); update(); }}
               >
                 Recruit
@@ -587,51 +602,19 @@ function App() {
 
         {/* Army management UI */}
         {ownArmySelected && (
-          <Paper elevation={3} sx={{position: "absolute", bottom: 8, left: 8, p: 1.5, ...overlayPaper, display: "flex", flexDirection: "column", gap: 1, width: 340}}>
+          <Paper elevation={3} sx={{position: "absolute", bottom: 8, left: 8, p: 1.5, ...overlayPaper, display: "flex", flexDirection: "column", gap: 1, width: 420}}>
             <Typography variant="body2" sx={{fontWeight: "bold"}}>
-              {selectedArmy.units.length} {selectedArmy.unitType}
+              {selectedArmy.units.length} {selectedArmy.unitType} at {selectedArmy.location}
             </Typography>
-
-            {selectedArmy.units.length >= 2 && (
-              <Box sx={{display: "flex", alignItems: "center", gap: 0.5}}>
-                <Slider size="small" value={splitCountClamped} min={1} max={splitMax}
-                  onChange={(_, v) => setSplitCount(v as number)} sx={{flex: 1}}/>
-                <Button size="small" variant="text" sx={{minWidth: 28, p: 0}} onClick={() => setSplitCount(Math.max(1, splitCountClamped - 1))}>-</Button>
-                <Typography variant="body2" sx={{width: 28, textAlign: "center"}}>{splitCountClamped}</Typography>
-                <Button size="small" variant="text" sx={{minWidth: 28, p: 0}} onClick={() => setSplitCount(Math.min(splitMax, splitCountClamped + 1))}>+</Button>
-                <Button
-                  variant="outlined" size="small" sx={{textTransform: "none", width: 72}}
-                  disabled={game.countArmiesOfTypeAtLocation(currentPlayer, selectedArmy.unitType, selectedArmy.location) >= game.maxArmiesPerTypeAtNode(selectedArmy.location)}
-                  onClick={() => { gameRef.current.splitPlayerArmy(selectedArmy, splitCountClamped); update(); }}
-                >
-                  Split
-                </Button>
-              </Box>
-            )}
-
+            <UnitPicker units={selectedArmy.units} selected={selectedUnits} onChange={setSelectedUnits}/>
             <Box sx={{display: "flex", alignItems: "center", gap: 0.5}}>
-              <Slider size="small" value={disbandCountClamped} min={1} max={disbandMax}
-                onChange={(_, v) => setDisbandCount(v as number)} sx={{flex: 1}}/>
-              <Button size="small" variant="text" sx={{minWidth: 28, p: 0}} onClick={() => setDisbandCount(Math.max(1, disbandCountClamped - 1))}>-</Button>
-              <Typography variant="body2" sx={{width: 28, textAlign: "center"}}>{disbandCountClamped}</Typography>
-              <Button size="small" variant="text" sx={{minWidth: 28, p: 0}} onClick={() => setDisbandCount(Math.min(disbandMax, disbandCountClamped + 1))}>+</Button>
-              <Button
-                variant="contained" color="error" size="small" sx={{textTransform: "none", width: 72}}
-                onClick={() => {
-                  gameRef.current.disbandPlayerArmy(selectedArmy, disbandCountClamped);
-                  if (selectedArmy.units.length === 0) clearSelection();
-                  update();
-                }}
-              >
+              <Typography variant="caption" sx={{flex: 1, color: moveHint.warning ? "#FFB300" : "text.secondary"}}>
+                {moveHint.text}
+              </Typography>
+              <Button variant="contained" color="error" size="small" sx={{textTransform: "none", width: 72}} disabled={selectedUnits.size === 0} onClick={handleDisband}>
                 Disband
               </Button>
             </Box>
-
-            {mergeableArmies.size > 0 && (
-              <Typography variant="caption" sx={{color: "text.secondary"}}>
-                Click a highlighted army to merge
-              </Typography>
-            )}
           </Paper>
         )}
 
