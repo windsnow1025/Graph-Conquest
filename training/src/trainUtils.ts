@@ -157,12 +157,12 @@ export function createSampleWriter(outPath: string) {
 // ─── Python training ───
 
 export async function trainWithPython(
-  dataFile: string, modelDir: string, epochs: number, numSamples: number, fresh: boolean, actionBalance: number,
+  dataFiles: string[], modelDir: string, epochs: number, numSamples: number, fresh: boolean, actionBalance: number,
 ): Promise<boolean> {
   const pythonDir = path.resolve("training/python");
   const trainArgs = [
     "run", "python", "-m", "app.scripts.train",
-    "--data", dataFile, "--model", modelDir,
+    "--data", ...dataFiles, "--model", modelDir,
     "--epochs", String(epochs), "--batch-size", String(BATCH_SIZE), "--lr", String(LEARNING_RATE),
     ...(fresh ? ["--fresh"] : []),
     ...(actionBalance > 0 ? ["--balance-actions", String(actionBalance)] : []),

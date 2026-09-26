@@ -183,7 +183,7 @@ async function main() {
   exportSamples(allSamples, dataFile);
   log(`\n4. Exported ${allSamples.length} samples → ${dataFile}`);
 
-  const ok = await trainWithPython(dataFile, SMOKE_MODEL_DIR, 2, allSamples.length, true, 0);
+  const ok = await trainWithPython([dataFile], SMOKE_MODEL_DIR, 2, allSamples.length, true, 0);
   assert(ok, "python training failed");
 
   // ── 5. Reload exported model, play a full game ──

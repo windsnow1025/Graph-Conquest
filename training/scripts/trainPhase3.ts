@@ -114,7 +114,7 @@ async function main() {
     return;
   }
 
-  const ok = await trainWithPython(dataFile, MODEL_DIR_PHASE3, EPOCHS, m.kept, false, 0);
+  const ok = await trainWithPython([dataFile], MODEL_DIR_PHASE3, EPOCHS, m.kept, false, 0);
   if (!ok) {
     copyModelDir(MODEL_DIR_PHASE2, MODEL_DIR_PHASE3);
     log("Training failed; phase3 restored to the phase2 starting point.");

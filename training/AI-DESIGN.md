@@ -81,6 +81,8 @@ Typical flow:
 ```bash
 npx tsx training/scripts/generateData.ts imitation --out imit-v1
 npx tsx training/scripts/trainPhase1.ts imit-v1
+npx tsx training/scripts/generateData.ts stalemate --out stale-v1 --model phase1
+npx tsx training/scripts/trainPhase1.ts imit-v1 stale-v1
 npx tsx training/scripts/generateData.ts vs-random --out vsr-p1-v1 --games 2000
 npx tsx training/scripts/trainPhase2.ts vsr-p1-v1
 npx tsx training/scripts/generateData.ts mixed --out mix-p2-v1
@@ -296,8 +298,17 @@ commitment labels:
 
 All phases consume a named dataset from the store and do not simulate.
 
-**Phase 1 — Imitation (scripts/trainPhase1.ts <imitation dataset>)**:
-1. Dataset: 10 Greedy vs Passive + 70 Greedy vs Random + 10 Greedy vs Greedy + 10 DAgger (NN vs Random) by default
+**Phase 1 — Imitation (scripts/trainPhase1.ts <imitation dataset> [dataset...])**:
+1. Dataset: 10 Greedy vs Passive + 70 Greedy vs Random + 10 Greedy vs Greedy + 10 DAgger (NN vs Random) by default,
+   plus stalemate datasets (generateData.ts stalemate): greedy labels at the
+   states a trained model stalls in. Deterministic play draws by dominating
+   without taking the last recruit nodes (hundreds of units on 5 to 12 nodes,
+   moves that never enter reachable empty enemy nodes); greedy handed those
+   seats at turn 40 won every one of them in that same turn (testHandoff.ts),
+   and greedy games end by turn 20, so the plain imitation data has no labels
+   for those states. A stalemate dataset plays the model vs Random until the
+   handoff turn, labels a few DAgger turns of the open games, and lets greedy
+   finish for the outcome.
 2. Value target = game outcome (win=1, loss=0, draw=1/3; draw = uniform prior over 3 players, so drawn games carry no positive advantage)
 3. 3 value-only samples per game (all players' perspectives)
 4. Policy weight = 1 (pure imitation)

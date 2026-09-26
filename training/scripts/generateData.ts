@@ -20,6 +20,15 @@
  *     transform); phase 1 training data. DAgger games are played by
  *     --dagger-model (a fresh random model without it) and labeled by greedy.
  *
+ *   npx tsx training/scripts/generateData.ts stalemate --out <name>
+ *       [--games 100] [--model phase1] [--from 30] [--label 5]
+ *     Greedy labels at the states the model stalls in: NN (deterministic) vs
+ *     2 Random seats until turn --from; a game decided by then is skipped, an
+ *     open one gets --label DAgger turns (the NN keeps executing its own
+ *     choices, greedy labels every decision), then greedy plays the seat to
+ *     the end for the outcome. An imitation dataset; phase 1 trains on it
+ *     together with a greedy one.
+ *
  *   --force overwrites an existing dataset of the same name.
  */
 import {setupBackend} from "../src/setupBackend";
@@ -53,6 +62,7 @@ function usage(): never {
     "  generateData.ts vs-random --out <name> [--games 500] [--model phase1] [--temperature 1.0] [--epsilon 0.1]",
     "  generateData.ts mixed --out <name> [--games-opp 100] [--games-self 100] [--model phase2] [--temperature 1.0] [--epsilon 0.1]",
     "  generateData.ts imitation --out <name> [--passive 10] [--random 70] [--greedy 10] [--dagger 10] [--dagger-model phase1]",
+    "  generateData.ts stalemate --out <name> [--games 100] [--model phase1] [--from 30] [--label 5]",
     "  --force to overwrite an existing dataset",
   ].join("\n"));
   process.exit(1);
@@ -312,6 +322,72 @@ async function generateImitation(name: string, dir: string, opts: Map<string, st
   };
 }
 
+// ─── stalemate (phase 1 diet for the states the model stalls in) ───
+
+async function generateStalemate(name: string, dir: string, opts: Map<string, string>): Promise<DatasetManifest> {
+  const modelName = opts.get("model") ?? "phase1";
+  const games = numOpt(opts, "games", 100);
+  const from = numOpt(opts, "from", 30);
+  const label = numOpt(opts, "label", 5);
+
+  const {model, dir: modelDir} = await loadModel(modelName);
+  const writer = createSampleWriter(path.join(dir, "samples.bin"));
+  const stats: GameStats = {wins: 0, losses: 0, draws: 0, turnsSum: 0};
+  let played = 0;
+
+  log(`\nGenerating stalemate data: ${games} games of NN(${modelName}) vs Random still open at turn ${from}, ${label} DAgger turns each, greedy finish`);
+  for (let g = 0; g < games; played++) {
+    const game = createRandomizedGame();
+    const nnIdx = played % 3;
+    const t0 = Date.now();
+    while (!game.gameOver && game.turnCount < from) {
+      if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model);
+      else randomTurn(game);
+    }
+    if (game.gameOver) continue;
+
+    const gameSamples: Sample[] = [];
+    let labeled = 0;
+    while (!game.gameOver && labeled < label) {
+      if (game.currentPlayerIndex === nnIdx) { daggerTurn(game, model, gameSamples); labeled++; }
+      else randomTurn(game);
+    }
+    while (!game.gameOver) {
+      if (game.currentPlayerIndex === nnIdx) greedyTurn(game);
+      else randomTurn(game);
+    }
+
+    const winner = game.winner?.name ?? "draw";
+    for (const s of gameSamples) {
+      s.value = terminalValue(winner, game.players[s.playerIdx]);
+    }
+    for (let pi = 0; pi < 3; pi++) {
+      const vs = emptySample(pi);
+      vs.state = encodeState(game, pi);
+      vs.value = terminalValue(winner, game.players[pi]);
+      gameSamples.push(vs);
+    }
+    writer.writeBatch(gameSamples);
+
+    recordOutcome(stats, winnerIndex(game), nnIdx, false, game.turnCount);
+    logGame("[stale  ]", g, games, game, gameSamples.length, ((Date.now() - t0) / 1000).toFixed(1));
+    g++;
+  }
+  model.dispose();
+
+  const samples = writer.count;
+  writer.close();
+  log(`${games} of ${played} games were open at turn ${from}`);
+  return {
+    name, type: "imitation", format: "sample", createdAt: new Date().toISOString(), simRev: gitRev(),
+    params: {games, from, label, played, maxTurns: MAX_TURNS},
+    model: {name: modelName, weightsMd5: weightsMd5(modelDir)},
+    opponents: [{name: "random"}, {name: "greedy"}],
+    stateDim: encodeState(createRandomizedGame(), 0).length,
+    stats: {games, records: 0, snapshots: 0, samples, ...finishStats(stats, games)},
+  };
+}
+
 function finishStats(stats: GameStats, games: number): {wins: number; losses: number; draws: number; avgTurns: number} {
   return {
     wins: stats.wins, losses: stats.losses, draws: stats.draws,
@@ -347,6 +423,7 @@ async function main() {
   if (type === "vs-random") manifest = await generateVsRandom(name, dir, opts);
   else if (type === "mixed") manifest = await generateMixed(name, dir, opts);
   else if (type === "imitation") manifest = await generateImitation(name, dir, opts);
+  else if (type === "stalemate") manifest = await generateStalemate(name, dir, opts);
   else usage();
 
   writeManifest(dir, manifest);

@@ -1,14 +1,15 @@
 /**
- * Phase 1 — Imitation learning on a persisted imitation dataset (greedy-labeled
+ * Phase 1 — Imitation learning on persisted imitation datasets (greedy-labeled
  * samples, see generateData.ts). This script does not simulate.
  *
- * Bootstraps a fresh model and trains it from scratch on the dataset's
- * samples.bin (already in trainer format; imitation has no consumer-side
- * transform).
+ * Bootstraps a fresh model and trains it from scratch on the datasets'
+ * samples.bin files (already in trainer format; imitation has no
+ * consumer-side transform).
  * Output: training/model/phase1/
  *
- * Usage: npx tsx training/scripts/trainPhase1.ts <dataset>
- *   <dataset>: an imitation dataset from the trajectory store
+ * Usage: npx tsx training/scripts/trainPhase1.ts <dataset> [dataset...]
+ *   <dataset>: an imitation dataset from the trajectory store (a greedy one,
+ *   optionally with stalemate ones)
  * Env: EPOCHS (default 50), ACTION_BALANCE (default 1: inverse class frequency
  *   power on the action-type loss, 0 = off)
  */
@@ -42,35 +43,42 @@ async function main() {
   await setupBackend();
   initLog("phase1.log");
 
-  const datasetName = process.argv[2];
-  if (!datasetName) {
-    log("Usage: npx tsx training/scripts/trainPhase1.ts <dataset>");
+  const datasetNames = process.argv.slice(2);
+  if (datasetNames.length === 0) {
+    log("Usage: npx tsx training/scripts/trainPhase1.ts <dataset> [dataset...]");
     log(`Available datasets: ${listDatasets().join(", ") || "(none; run generateData.ts first)"}`);
     return;
   }
-  const dataDir = datasetPath(datasetName);
-  const manifest = readManifest(dataDir);
-  if (manifest.type !== "imitation") {
-    log(`ERROR: dataset ${datasetName} has type ${manifest.type}; phase 1 consumes imitation datasets.`);
-    return;
+  const dataFiles: string[] = [];
+  let samples = 0;
+  const lines: string[] = [];
+  for (const datasetName of datasetNames) {
+    const dataDir = datasetPath(datasetName);
+    const manifest = readManifest(dataDir);
+    if (manifest.type !== "imitation") {
+      log(`ERROR: dataset ${datasetName} has type ${manifest.type}; phase 1 consumes imitation datasets.`);
+      return;
+    }
+    const dataFile = path.join(dataDir, "samples.bin");
+    if (!fs.existsSync(dataFile)) {
+      log(`ERROR: ${dataFile} not found.`);
+      return;
+    }
+    dataFiles.push(dataFile);
+    samples += manifest.stats.samples ?? 0;
+    const ds = manifest.stats;
+    lines.push(`Dataset ${datasetName}: ${ds.games} games, W/L/D ${ds.wins}/${ds.losses}/${ds.draws}, avg turns ${ds.avgTurns}, ${ds.samples ?? 0} samples, simRev ${manifest.simRev}`);
   }
-  const dataFile = path.join(dataDir, "samples.bin");
-  if (!fs.existsSync(dataFile)) {
-    log(`ERROR: ${dataFile} not found.`);
-    return;
-  }
-  const samples = manifest.stats.samples ?? 0;
 
   await bootstrapModel(MODEL_DIR_PHASE1);
 
-  log(`\n=== Phase 1: Imitation (dataset ${datasetName}, ${EPOCHS} epochs) ===`);
-  const ds = manifest.stats;
-  log(`Dataset: ${ds.games} games, W/L/D ${ds.wins}/${ds.losses}/${ds.draws}, avg turns ${ds.avgTurns}, ${samples} samples, simRev ${manifest.simRev}`);
+  log(`\n=== Phase 1: Imitation (datasets ${datasetNames.join(" + ")}, ${EPOCHS} epochs) ===`);
+  for (const line of lines) log(line);
 
   log("\nBaseline (before training):");
   await testNNvsRandom(MODEL_DIR_PHASE1);
 
-  const ok = await trainWithPython(dataFile, MODEL_DIR_PHASE1, EPOCHS, samples, true, ACTION_BALANCE);
+  const ok = await trainWithPython(dataFiles, MODEL_DIR_PHASE1, EPOCHS, samples, true, ACTION_BALANCE);
   if (!ok) {
     log("Training failed.");
     return;
