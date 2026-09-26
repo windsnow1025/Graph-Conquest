@@ -9,8 +9,9 @@ src/AI/
   nn/
     GameIndex.ts        # Fixed index order of the map nodes and the unit types
     UnitGroups.ts       # (remainingMoves, canAttack) unit groups, the unit of per-group decisions
+    FractionBins.ts     # The FRACTION_BINS levels every fraction head chooses from
     StateEncoder.ts     # State → Float32Array[1360], 8 decision contexts
-    NNModel.ts          # TF.js model v10: per-head context shortcut, 11 output heads
+    NNModel.ts          # TF.js model v11: per-head context shortcut, 11 output heads, categorical fraction heads
     ActionSpace.ts      # 3 action types, masks, per-group execution
 
 training/
@@ -101,7 +102,7 @@ group = remainingMoves * 2 + (canAttack ? 0 : 1)
 ```
 
 Units of one army in the same group differ only in health, so the encoder
-reports a unit count per group and the fraction heads output one fraction per
+reports a unit count per group and the fraction heads output one level per
 group. Which units of a group realise a count is fixed: the healthiest first
 for moving and committing, the weakest first for disbanding (health
 distribution is the one part of the unit state the fixed-size encoding does
@@ -143,7 +144,8 @@ All features centered: value -= 0.5.
 
 ## Output Heads (NNModel.ts, 11 heads)
 
-Architecture v10: context-free trunk with per-head context shortcut. The encoder
+Architecture v11: context-free trunk with per-head context shortcut and
+categorical fraction heads. The encoder
 emits 1360 features; the trunk consumes only the context-free core
 state[0:1068], so the value head (trunk only) is a pure state value whose TD
 differences are not polluted by decision-context switches. Policy heads receive
@@ -170,19 +172,27 @@ Each head: concat(trunk, relevant_context) → Dense(64,ReLU) → output
 |---|------|------|------------|---------------|
 | 0 | value | 1 | sigmoid | all (position quality) |
 | 1 | actionType | 3 | linear | army (EXIT/MOVE/DISBAND), masked softmax |
-| 2 | moveFraction | 4 | sigmoid | moveCount (fraction per move group) |
-| 3 | disbandFraction | 6 | sigmoid | army (DISBAND, fraction per disband group) |
-| 4 | recruitFraction | 1 | sigmoid | recruit |
+| 2 | moveFraction | 4 × 5 | linear, softmax per group | moveCount (level per move group) |
+| 3 | disbandFraction | 6 × 5 | linear, softmax per group | army (DISBAND, level per disband group) |
+| 4 | recruitFraction | 5 | linear, softmax | recruit (level of the affordable count) |
 | 5 | moveTarget | 16 | linear | moveTarget (destination node, masked softmax over legal) |
 | 6 | battleTarget | 17 | linear | battleTarget (attackable node or stop, masked softmax) |
 | 7 | battleSelect | 1 | sigmoid | battleSelect (score per option, argmax over {armies, done}) |
-| 8 | commitFraction | 3 | sigmoid | battleSelect (fraction per commit group of the chosen army) |
-| 9 | killFraction | 1 | sigmoid | battleAllocate (fraction of killNeeded) |
+| 8 | commitFraction | 3 × 5 | linear, softmax per group | battleSelect (level per commit group of the chosen army) |
+| 9 | killFraction | 5 | linear, softmax | battleAllocate (level of killNeeded) |
 | 10 | battleRetreat | 1 | sigmoid | battleRetreat (retreat?) |
 
 Categorical decisions (actionType/moveTarget/battleTarget) never produce "no action by
 default": an option is always chosen from the masked softmax. Passivity exists only as
 explicit options (EXIT, stop, done) that must outscore the alternatives.
+
+Fraction heads (FractionBins.ts): a fraction is one of FRACTION_BINS = 5 levels
+(0, 0.25, 0.5, 0.75, 1) with a softmax per unit group. Argmax play takes the
+most likely level of each group; data generation samples each group at the
+temperature (or draws every group uniformly with probability ε), so a played
+level is an on-policy sample that the reinforcement phases reinforce with
+cross-entropy. The v10 sigmoid heads received no reinforcement gradient: their
+targets were their own outputs.
 
 ## Decision Loop (TurnExecutor.ts, 4 phases)
 
@@ -191,8 +201,8 @@ Phase 1: Army actions (pre-battle)
   For each army, until EXIT:
     Select action type via masked softmax → argmax (temperature sample in training)
     If MOVE: masked softmax over 16 destination logits → one destination (always resolves),
-             then moveFraction → units per move group that reach it
-    If DISBAND: disbandFraction → units per disband group
+             then a level per move group (moveFraction) → units per group that reach it
+    If DISBAND: a level per disband group (disbandFraction) → units per group
     Execute action (MOVE/DISBAND)
 
 Phase 2: Battle loop
@@ -308,7 +318,8 @@ All phases consume a named dataset from the store and do not simulate.
    recursion propagates the terminal truth through the trajectory
 3. Positive advantage weights only (w > 0, no magnitude threshold): reinforce
    improving turns, discard negative ones; ε-explored decisions carry only value
-   labels (no policy target). A magnitude cutoff was tried and removed: the weight
+   labels (no policy target). Temperature sampling covers every head, the
+   fraction levels included, so each played level is an on-policy sample. A magnitude cutoff was tried and removed: the weight
    already scales the gradient, and the cutoff selection-biased later iterations
    toward the noisy tail once the critic flattened.
    INVARIANT: policy weights must stay non-negative. Negative-weight training has
@@ -358,7 +369,8 @@ Both reinforcement phases were gated out for both phase 1 models: phase 2 gave
 gradient in these phases (their targets are the model's own outputs, so the
 head losses start at 0), and the categorical heads' losses rise during the
 4 epochs. training/model/phase1, phase2 and phase3 therefore all hold the
-published phase 1 model.
+published phase 1 model. v11 replaces the sigmoid fraction heads with
+categorical levels for this reason.
 
 ## Binary Sample Format (1435 floats per sample)
 
@@ -380,6 +392,8 @@ moveTargetIdx / battleTargetIdx are class indices (-1 = no label); their masks l
 the legal options (battleTargetMask[16] = stop, always 1). Both train with masked
 cross-entropy. battleSelect rows are per-option (chosen = 1, others = 0, one row per
 candidate army plus the done option) and train with BCE; inference takes the argmax
-across the step's option scores. The per-group fraction heads train with MSE per
-group, masked by the group masks (a group mask marks the groups the decision could
-draw from; the RL recorder reads the masks back from the recorded state).
+across the step's option scores. Fraction targets are stored as fractions (the
+labeler's count over the group size, or the played level); the trainer maps each to
+its nearest level and trains the head with cross-entropy per group, masked by the
+group masks (a group mask marks the groups the decision could draw from; the RL
+recorder reads the masks back from the recorded state).

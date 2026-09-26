@@ -199,6 +199,8 @@ async function main() {
   log(`  Game finished: winner=${game.winner?.name ?? "none (turn cap)"} T${game.turnCount}`);
 
   m2.dispose();
+  fs.rmSync(dataFile, {force: true});
+  fs.rmSync(SMOKE_MODEL_DIR, {recursive: true, force: true});
   log("\n=== PASS ===");
 }
 

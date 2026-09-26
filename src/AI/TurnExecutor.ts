@@ -1,12 +1,13 @@
 /**
- * Turn executor v6: army actions → battles → army actions → recruit.
+ * Turn executor v7: army actions → battles → army actions → recruit.
  *
  * Decision loop:
  *   Phase 1: Army actions (pre-battle positioning)
  *     - action type: masked softmax over {EXIT, MOVE, DISBAND}
  *     - MOVE destination: masked softmax over 16 nodes (one pick, always resolves)
- *     - MOVE count: a fraction per move group of the units that can reach it
- *     - DISBAND count: a fraction per disband group
+ *     - MOVE count: a level per move group of the units that can reach it
+ *       (every fraction head is a softmax over FRACTION_BINS levels per group)
+ *     - DISBAND count: a level per disband group
  *   Phase 2: Battle loop
  *     - Each step: softmax over {attackable nodes, stop}; stop ends the phase
  *     - Army selection: autoregressive argmax over {remaining armies, done};
@@ -25,7 +26,9 @@ import type Battle from "../lib/Battle";
 import {BattlePhase, BattleResult} from "../lib/Battle";
 import {calculateUnitsNeeded} from "../lib/Combat";
 import type {NNModel, NNPrediction} from "./nn/NNModel";
-import {applyMaskAndSoftmax, argmax, sampleFromProbs, BATTLE_TARGET_DIM, BATTLE_TARGET_STOP} from "./nn/NNModel";
+import {
+  applyMaskAndSoftmax, softmax, argmax, argmaxFractions, groupLogits, sampleFromProbs, BATTLE_TARGET_DIM, BATTLE_TARGET_STOP,
+} from "./nn/NNModel";
 import {battleStuckReport} from "./battleReport";
 import {NODE_ORDER, NUM_NODES, UNIT_TYPES} from "./nn/GameIndex";
 import {encodeState, perTypeState} from "./nn/StateEncoder";
@@ -34,7 +37,8 @@ import {
   computeActionTypeMask, executeArmyAction, unitsToCommit,
   ACTION_EXIT, ACTION_MOVE, ACTION_DISBAND,
 } from "./nn/ActionSpace";
-import {NUM_COMMIT_GROUPS, moveGroups, commitGroups, disbandGroups, groupMask} from "./nn/UnitGroups";
+import {NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS, moveGroups, commitGroups, disbandGroups, groupMask} from "./nn/UnitGroups";
+import {FRACTION_BINS, binToFraction} from "./nn/FractionBins";
 
 // ─── Turn options (exploration + recording) ───
 
@@ -91,16 +95,21 @@ function chooseBinary(value: number, eps: number): {choice: boolean; explored: b
   return {choice: value > 0.5, explored: false};
 }
 
-/** Add noise to a fraction [0,1]. */
-function noisyFraction(value: number, eps: number): {value: number; explored: boolean} {
-  if (eps > 0 && Math.random() < eps) return {value: Math.random(), explored: true};
+/**
+ * Choose a level per group of a fraction head: with probability eps every
+ * group is drawn uniformly (exploration, value label only), otherwise each
+ * group samples its softmax at the temperature, or takes the argmax at temp=0.
+ */
+function chooseFractions(logits: Float32Array, groups: number, temp: number, eps: number): {value: Float32Array; explored: boolean} {
+  if (eps > 0 && Math.random() < eps) {
+    return {value: Float32Array.from({length: groups}, () => binToFraction(Math.floor(Math.random() * FRACTION_BINS))), explored: true};
+  }
+  const value = new Float32Array(groups);
+  for (let g = 0; g < groups; g++) {
+    const group = groupLogits(logits, g);
+    value[g] = binToFraction(temp > 0 ? sampleFromProbs(softmax(Float32Array.from(group, v => v / temp))) : argmax(group));
+  }
   return {value, explored: false};
-}
-
-/** Add noise to a vector of fractions [0,1]: with probability eps every entry is redrawn. */
-function noisyFractions(values: Float32Array, eps: number): {value: Float32Array; explored: boolean} {
-  if (eps > 0 && Math.random() < eps) return {value: Float32Array.from(values, () => Math.random()), explored: true};
-  return {value: new Float32Array(values), explored: false};
 }
 
 // ─── Phase 1 & 3: Army actions ───
@@ -128,7 +137,7 @@ function* armyActionsPhase(
       const pred = model.predict(state);
 
       const {choice: actionType, explored: actionExplored} = chooseAction(pred.actionTypeLogits, actionMask, temp, eps);
-      const disband = noisyFractions(pred.disbandFraction, eps);
+      const disband = chooseFractions(pred.disbandFractionLogits, NUM_DISBAND_GROUPS, temp, eps);
       opts.onDecision?.({playerIdx, state, pred, action: {type: "army", actionType, disbandFraction: disband.value},
         explored: actionExplored || (actionType === ACTION_DISBAND && disband.explored)});
       if (actionType === ACTION_EXIT) break;
@@ -154,7 +163,7 @@ function* armyActionsPhase(
         };
         const countState = encodeState(game, playerIdx, countContext);
         const countPred = model.predict(countState);
-        const count = noisyFractions(countPred.moveFraction, eps);
+        const count = chooseFractions(countPred.moveFractionLogits, NUM_MOVE_GROUPS, temp, eps);
         fractions = count.value;
         opts.onDecision?.({playerIdx, state: countState, pred: countPred, action: {type: "moveCount", moveFraction: fractions},
           explored: count.explored});
@@ -180,6 +189,7 @@ function* battleAllocatePhase(
   playerIdx: number, isAttacker: boolean, opts: TurnOptions,
 ): Generator<void> {
   const armies = isAttacker ? battle.attackerArmies : battle.defenderArmies;
+  const temp = opts.temperature ?? 0;
   const eps = opts.epsilon ?? 0;
 
   for (const army of [...armies]) {
@@ -205,8 +215,8 @@ function* battleAllocatePhase(
       const state = encodeState(game, playerIdx, context);
       const pred = model.predict(state);
 
-      const kfChoice = noisyFraction(pred.killFraction, eps);
-      const kf = kfChoice.value;
+      const kfChoice = chooseFractions(pred.killFractionLogits, 1, temp, eps);
+      const kf = kfChoice.value[0];
 
       opts.onDecision?.({playerIdx, state, pred, action: {type: "battleAllocate", killFraction: kf}, explored: kfChoice.explored});
 
@@ -290,8 +300,10 @@ function* battleLoop(
  */
 function selectBattleArmies(
   game: GameSystem, model: NNModel, playerIdx: number,
-  targetNodeIdx: number, candidates: Army[], eps: number, opts: TurnOptions,
+  targetNodeIdx: number, candidates: Army[], opts: TurnOptions,
 ): Map<Army, Unit[]> {
+  const temp = opts.temperature ?? 0;
+  const eps = opts.epsilon ?? 0;
   const selected = new Map<Army, Unit[]>();
   const remaining = [...candidates];
 
@@ -321,11 +333,11 @@ function selectBattleArmies(
       ? Math.floor(Math.random() * options.length)
       : options.reduce((best, o, i) => (o.pred.battleSelect > options[best].pred.battleSelect ? i : best), 0);
     const chosen = options[pick];
-    const commit = chosen.army ? noisyFractions(chosen.pred.commitFraction, eps) : null;
+    const commit = chosen.army ? chooseFractions(chosen.pred.commitFractionLogits, NUM_COMMIT_GROUPS, temp, eps) : null;
 
     options.forEach((o, i) => {
       opts.onDecision?.({playerIdx, state: o.state, pred: o.pred,
-        action: {type: "battleSelect", chosen: i === pick ? 1 : 0, commitFraction: i === pick && commit ? commit.value : o.pred.commitFraction},
+        action: {type: "battleSelect", chosen: i === pick ? 1 : 0, commitFraction: i === pick && commit ? commit.value : argmaxFractions(o.pred.commitFractionLogits, NUM_COMMIT_GROUPS)},
         explored: explored || (i === pick && commit !== null && commit.explored)});
     });
 
@@ -372,7 +384,7 @@ function* battlePhase(
     const candidates = game.getArmiesInRange(location);
     if (candidates.length === 0) continue;
 
-    const selected = selectBattleArmies(game, model, playerIdx, choice, candidates, eps, opts);
+    const selected = selectBattleArmies(game, model, playerIdx, choice, candidates, opts);
     if (selected.size === 0) continue;
 
     const battle = game.startBattle(location, selected);
@@ -392,6 +404,7 @@ function* recruitPhase(
 ): Generator<void> {
   const player = game.players[playerIdx];
   const recruitLocs = game.recruitLocations;
+  const temp = opts.temperature ?? 0;
   const eps = opts.epsilon ?? 0;
 
   for (const location of recruitLocs) {
@@ -407,10 +420,10 @@ function* recruitPhase(
       const state = encodeState(game, playerIdx, context);
       const pred = model.predict(state);
 
-      const frac = noisyFraction(pred.recruitFraction, eps);
-      opts.onDecision?.({playerIdx, state, pred, action: {type: "recruit", recruitFraction: frac.value}, explored: frac.explored});
+      const frac = chooseFractions(pred.recruitFractionLogits, 1, temp, eps);
+      opts.onDecision?.({playerIdx, state, pred, action: {type: "recruit", recruitFraction: frac.value[0]}, explored: frac.explored});
 
-      const count = Math.round(frac.value * affordable);
+      const count = Math.round(frac.value[0] * affordable);
       if (count <= 0) continue;
       if (!player.canBuy(unitType, count)) continue;
 

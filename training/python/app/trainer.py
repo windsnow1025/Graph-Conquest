@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from app.config import (
     STATE_SIZE, NUM_ACTION_TYPES,
-    NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS,
+    NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS, FRACTION_BINS,
     MOVE_TARGET_DIM, BATTLE_TARGET_DIM,
     OFF_STATE, OFF_VALUE, OFF_POLICY_WEIGHT,
     OFF_ACTION_TYPE, OFF_ACTION_MASK,
@@ -71,16 +71,18 @@ def _bce_weighted(pred, target, mask, weight):
     return _weighted_active_mean(_clamp_push_away(bce, weight), mask, weight)
 
 
-def _mse_weighted(pred, target, mask, weight):
-    """MSE, masked and weighted."""
-    mse = (pred.squeeze(1) - target) ** 2
-    return _weighted_active_mean(mse, mask, weight)
+def _ce_levels_weighted(logits, target_frac, mask, weight):
+    """Cross-entropy of a fraction head toward the level nearest each target fraction.
 
-
-def _mse_vector_weighted(pred, target, mask, weight):
-    """Per-element MSE of a per-group head [B,G], masked per element and weighted per sample."""
-    mse = (pred - target) ** 2
-    return _weighted_active_mean(mse, mask, weight.unsqueeze(1))
+    logits [B, G*FRACTION_BINS] hold FRACTION_BINS logits per group, target_frac
+    and mask are [B, G] (a single-fraction head is G = 1), weight is per sample.
+    """
+    groups = target_frac.shape[1]
+    log_probs = F.log_softmax(logits.view(-1, groups, FRACTION_BINS), dim=2)
+    levels = torch.round(target_frac * (FRACTION_BINS - 1)).long().clamp(0, FRACTION_BINS - 1)
+    ce = -log_probs.gather(2, levels.unsqueeze(2)).squeeze(2)
+    w = weight.unsqueeze(1)
+    return _weighted_active_mean(_clamp_push_away(ce, w), mask, w)
 
 
 def _ce_masked_weighted(logits, target, legal_mask, active, weight):
@@ -139,21 +141,21 @@ def _compute_losses(model, batch, action_class_weight):
         action_weight = policy_weight * action_class_weight[action_type.clamp(min=0)]
     a_loss = _ce_masked_weighted(pred_action, action_type, action_mask, action_active, action_weight)
 
-    # 3-4. Move/disband per-group fractions (MSE per group, weighted)
-    mf_loss = _mse_vector_weighted(pred_move_frac, move_frac, move_frac_mask, policy_weight)
-    df_loss = _mse_vector_weighted(pred_disband, disband_frac, disband_mask, policy_weight)
+    # 3-4. Move/disband levels per group (cross-entropy per group, weighted)
+    mf_loss = _ce_levels_weighted(pred_move_frac, move_frac, move_frac_mask, policy_weight)
+    df_loss = _ce_levels_weighted(pred_disband, disband_frac, disband_mask, policy_weight)
 
-    # 5. Recruit fraction (MSE, weighted)
-    rf_loss = _mse_weighted(pred_recruit, recruit_frac, recruit_mask, policy_weight)
+    # 5. Recruit level (cross-entropy, weighted)
+    rf_loss = _ce_levels_weighted(pred_recruit, recruit_frac.unsqueeze(1), recruit_mask.unsqueeze(1), policy_weight)
 
     # 6-7. Categorical heads (masked cross-entropy, weighted)
     mv_loss = _ce_masked_weighted(pred_move, move_target, move_mask, move_active, policy_weight)
     bt_loss = _ce_masked_weighted(pred_btarget, battle_target, bt_mask, bt_active, policy_weight)
 
-    # 8-11. Battle select (BCE), commit fractions (MSE per group), kill fraction (MSE), retreat (BCE)
+    # 8-11. Battle select (BCE), commit levels (cross-entropy per group), kill level (cross-entropy), retreat (BCE)
     bs_loss = _bce_weighted(pred_bselect, battle_select, bs_mask, policy_weight)
-    cf_loss = _mse_vector_weighted(pred_commit, commit_frac, commit_mask, policy_weight)
-    kf_loss = _mse_weighted(pred_kfrac, kill_frac, kf_mask, policy_weight)
+    cf_loss = _ce_levels_weighted(pred_commit, commit_frac, commit_mask, policy_weight)
+    kf_loss = _ce_levels_weighted(pred_kfrac, kill_frac.unsqueeze(1), kf_mask.unsqueeze(1), policy_weight)
     rt_loss = _bce_weighted(pred_retreat, retreat, ret_mask, policy_weight)
 
     return [v_loss, a_loss, mf_loss, df_loss, rf_loss,

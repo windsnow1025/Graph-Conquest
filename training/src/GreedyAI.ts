@@ -29,11 +29,11 @@ import {
   ACTION_EXIT, ACTION_MOVE, ACTION_DISBAND,
 } from "../../src/AI/nn/ActionSpace";
 import {
-  NUM_UNIT_GROUPS, NUM_COMMIT_GROUPS,
+  NUM_UNIT_GROUPS, NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS,
   moveGroups, commitGroups, disbandGroups, groupMask, countsToFractions, takeByFractions,
 } from "../../src/AI/nn/UnitGroups";
 import type {NNModel} from "../../src/AI/nn/NNModel";
-import {applyMaskAndSoftmax, argmax, BATTLE_TARGET_DIM, BATTLE_TARGET_STOP} from "../../src/AI/nn/NNModel";
+import {applyMaskAndSoftmax, argmax, argmaxFractions, BATTLE_TARGET_DIM, BATTLE_TARGET_STOP} from "../../src/AI/nn/NNModel";
 import {battleStuckReport} from "../../src/AI/battleReport";
 import type {Sample} from "./SampleTypes";
 import {emptySample} from "./SampleTypes";
@@ -43,6 +43,9 @@ const FULL_FRACTIONS = new Float32Array(NUM_UNIT_GROUPS).fill(1);
 
 /** Largest per-group grid that is searched exhaustively; larger grids use coordinate descent. */
 const EXHAUSTIVE_CAP = 27;
+
+/** Recruit fractions of the affordable count tried by the labeler: the non-zero levels of the recruit head. */
+const RECRUIT_LEVELS = [0.25, 0.5, 0.75, 1.0];
 
 /** Legal destination mask [16] for an army's current movable locations. */
 function moveLegalMask(game: GameSystem, army: Army): Float32Array {
@@ -316,7 +319,7 @@ function simpleRecruit(game: GameSystem, playerIdx: number): void {
       const affordable = Math.floor(player.money / cost);
       if (affordable <= 0) continue;
       let bestFrac = 0, bestQ = quantile(game, playerIdx);
-      for (const frac of [0.2, 0.5, 0.8, 1.0]) {
+      for (const frac of RECRUIT_LEVELS) {
         const count = Math.round(frac * affordable);
         if (count <= 0 || !player.canBuy(unitType, count)) continue;
         const c = cloneGame(game);
@@ -443,9 +446,9 @@ function* lookaheadArmyActions(game: GameSystem, playerIdx: number, samples: Sam
           execTarget = argmax(applyMaskAndSoftmax(movePred.moveTargetLogits, legalMask));
           const moveGroupMask = groupMask(moveGroups(army.getMoveCandidates(NODE_ORDER[execTarget], game.gameMap, game.enemyLocations)));
           const countPred = model.predict(encodeState(game, playerIdx, {type: "moveCount", army, destinationIdx: execTarget, groupMask: moveGroupMask}));
-          execFractions = countPred.moveFraction;
+          execFractions = argmaxFractions(countPred.moveFractionLogits, NUM_MOVE_GROUPS);
         } else if (execAction === ACTION_DISBAND) {
-          execFractions = pred.disbandFraction;
+          execFractions = argmaxFractions(pred.disbandFractionLogits, NUM_DISBAND_GROUPS);
         }
       }
 
@@ -699,7 +702,7 @@ function lookaheadSelectArmies(
     if (model) {
       const preds = optionStates.map(st => model.predict(st));
       execPick = preds.reduce((best, p, i) => (p.battleSelect > preds[best].battleSelect ? i : best), 0);
-      execFractions = execPick < remaining.length ? preds[execPick].commitFraction : null;
+      execFractions = execPick < remaining.length ? argmaxFractions(preds[execPick].commitFractionLogits, NUM_COMMIT_GROUPS) : null;
     }
 
     if (execPick === doneIdx || execFractions === null) break;
@@ -791,7 +794,7 @@ function* lookaheadRecruit(game: GameSystem, playerIdx: number, samples: Sample[
       const cBase = cloneGame(game);
       simpleNextTurn(cBase, playerIdx);
       let bestQ = quantile(cBase, playerIdx);
-      for (const frac of [0.2, 0.5, 0.8, 1.0]) {
+      for (const frac of RECRUIT_LEVELS) {
         const count = Math.round(frac * affordable);
         if (count <= 0 || !player.canBuy(unitType, count)) continue;
         const c = cloneGame(game);
@@ -811,7 +814,7 @@ function* lookaheadRecruit(game: GameSystem, playerIdx: number, samples: Sample[
 
       // DAgger: NN decides actual fraction
       const execFrac = model
-        ? model.predict(encodeState(game, playerIdx, {type: "recruit", locationIdx: locIdx, unitType, affordableCount: affordable})).recruitFraction
+        ? argmaxFractions(model.predict(encodeState(game, playerIdx, {type: "recruit", locationIdx: locIdx, unitType, affordableCount: affordable})).recruitFractionLogits, 1)[0]
         : bestFrac;
       const count = Math.round(execFrac * affordable);
       if (count > 0 && player.canBuy(unitType, count)) {

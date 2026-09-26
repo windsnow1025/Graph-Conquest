@@ -1,5 +1,6 @@
 /**
- * Neural network model v10: context-free trunk with per-head context shortcut.
+ * Neural network model v11: context-free trunk with per-head context shortcut
+ * and categorical fraction heads.
  *
  * Architecture:
  *   state_core[1068] (encoding without the context block) → Dense(1024, ReLU) → Dense(256, ReLU) = trunk
@@ -13,8 +14,8 @@
  *
  * Categorical heads (masked softmax at inference):
  *   action_type[3], move_target[16] (destination node), battle_target[17] (node or stop)
- * Per-group fraction heads (sigmoid, one value per unit group):
- *   move_fraction[4], disband_fraction[6], commit_fraction[3]
+ * Fraction heads (FRACTION_BINS logits per unit group, softmax per group):
+ *   move_fraction[4 groups], disband_fraction[6], commit_fraction[3], recruit_fraction[1], kill_fraction[1]
  */
 import * as tf from "@tensorflow/tfjs";
 import {NUM_NODES} from "./GameIndex";
@@ -32,25 +33,32 @@ import {
 } from "./StateEncoder";
 import {NUM_ACTION_TYPES} from "./ActionSpace";
 import {NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS} from "./UnitGroups";
+import {FRACTION_BINS, binToFraction} from "./FractionBins";
 
 export const BATTLE_TARGET_DIM = NUM_NODES + 1; // 16 nodes + stop
 export const BATTLE_TARGET_STOP = NUM_NODES;    // index of the stop option
 
 export interface NNPrediction {
   value: number;
-  actionTypeLogits: Float32Array;   // [3]
-  moveFraction: Float32Array;       // [4] fraction per move group
-  disbandFraction: Float32Array;    // [6] fraction per disband group
-  recruitFraction: number;
-  moveTargetLogits: Float32Array;   // [16] destination node logits
-  battleTargetLogits: Float32Array; // [17] node logits + stop logit
-  battleSelect: number;             // score of one option (army or done), argmax across options
-  commitFraction: Float32Array;     // [3] fraction per commit group of the option's army
-  killFraction: number;
+  actionTypeLogits: Float32Array;      // [3]
+  moveFractionLogits: Float32Array;    // [4 × FRACTION_BINS] per move group
+  disbandFractionLogits: Float32Array; // [6 × FRACTION_BINS] per disband group
+  recruitFractionLogits: Float32Array; // [FRACTION_BINS]
+  moveTargetLogits: Float32Array;      // [16] destination node logits
+  battleTargetLogits: Float32Array;    // [17] node logits + stop logit
+  battleSelect: number;                // score of one option (army or done), argmax across options
+  commitFractionLogits: Float32Array;  // [3 × FRACTION_BINS] per commit group of the option's army
+  killFractionLogits: Float32Array;    // [FRACTION_BINS]
   battleRetreat: number;
 }
 
 const HEAD_HIDDEN = 64;
+
+// Output sizes in head order; a loaded model must match them
+const HEAD_SIZES = [
+  1, NUM_ACTION_TYPES, NUM_MOVE_GROUPS * FRACTION_BINS, NUM_DISBAND_GROUPS * FRACTION_BINS, FRACTION_BINS,
+  NUM_NODES, BATTLE_TARGET_DIM, 1, NUM_COMMIT_GROUPS * FRACTION_BINS, FRACTION_BINS, 1,
+];
 
 export class NNModel {
   private model: tf.LayersModel | null = null;
@@ -94,17 +102,17 @@ export class NNModel {
       }).apply(hidden) as tf.SymbolicTensor;
     }
 
-    const valueOut           = makeHead("value", 1, "sigmoid", []);
-    const actionTypeOut      = makeHead("action_type", NUM_ACTION_TYPES, "linear", [ctxDtInput, ctxArmyInput]);
-    const moveFractionOut    = makeHead("move_fraction", NUM_MOVE_GROUPS, "sigmoid", [ctxDtInput, ctxMcntInput]);
-    const disbandFractionOut = makeHead("disband_fraction", NUM_DISBAND_GROUPS, "sigmoid", [ctxDtInput, ctxArmyInput]);
-    const recruitFractionOut = makeHead("recruit_fraction", 1, "sigmoid", [ctxDtInput, ctxRecInput]);
-    const moveTargetOut      = makeHead("move_target", NUM_NODES, "linear", [ctxDtInput, ctxMovInput]);
-    const battleTargetOut    = makeHead("battle_target", BATTLE_TARGET_DIM, "linear", [ctxDtInput, ctxBtgtInput]);
-    const battleSelectOut    = makeHead("battle_select", 1, "sigmoid", [ctxDtInput, ctxBselInput]);
-    const commitFractionOut  = makeHead("commit_fraction", NUM_COMMIT_GROUPS, "sigmoid", [ctxDtInput, ctxBselInput]);
-    const killFractionOut    = makeHead("kill_fraction", 1, "sigmoid", [ctxDtInput, ctxBallocInput]);
-    const battleRetreatOut   = makeHead("battle_retreat", 1, "sigmoid", [ctxDtInput, ctxBretInput]);
+    const valueOut           = makeHead("value", HEAD_SIZES[0], "sigmoid", []);
+    const actionTypeOut      = makeHead("action_type", HEAD_SIZES[1], "linear", [ctxDtInput, ctxArmyInput]);
+    const moveFractionOut    = makeHead("move_fraction", HEAD_SIZES[2], "linear", [ctxDtInput, ctxMcntInput]);
+    const disbandFractionOut = makeHead("disband_fraction", HEAD_SIZES[3], "linear", [ctxDtInput, ctxArmyInput]);
+    const recruitFractionOut = makeHead("recruit_fraction", HEAD_SIZES[4], "linear", [ctxDtInput, ctxRecInput]);
+    const moveTargetOut      = makeHead("move_target", HEAD_SIZES[5], "linear", [ctxDtInput, ctxMovInput]);
+    const battleTargetOut    = makeHead("battle_target", HEAD_SIZES[6], "linear", [ctxDtInput, ctxBtgtInput]);
+    const battleSelectOut    = makeHead("battle_select", HEAD_SIZES[7], "sigmoid", [ctxDtInput, ctxBselInput]);
+    const commitFractionOut  = makeHead("commit_fraction", HEAD_SIZES[8], "linear", [ctxDtInput, ctxBselInput]);
+    const killFractionOut    = makeHead("kill_fraction", HEAD_SIZES[9], "linear", [ctxDtInput, ctxBallocInput]);
+    const battleRetreatOut   = makeHead("battle_retreat", HEAD_SIZES[10], "sigmoid", [ctxDtInput, ctxBretInput]);
 
     this.model = tf.model({
       inputs: [stateInput, ctxDtInput, ctxRecInput, ctxArmyInput, ctxMovInput, ctxMcntInput,
@@ -114,12 +122,18 @@ export class NNModel {
         recruitFractionOut, moveTargetOut, battleTargetOut, battleSelectOut,
         commitFractionOut, killFractionOut, battleRetreatOut,
       ],
-      name: "graph_conquest_nn_v10",
+      name: "graph_conquest_nn_v11",
     });
   }
 
   async load(pathOrHandler: string | tf.io.IOHandler): Promise<void> {
-    this.model = await tf.loadLayersModel(pathOrHandler);
+    const model = await tf.loadLayersModel(pathOrHandler);
+    const sizes = model.outputs.map(output => output.shape[1]);
+    if (sizes.length !== HEAD_SIZES.length || sizes.some((size, i) => size !== HEAD_SIZES[i])) {
+      model.dispose();
+      throw new Error(`Model head sizes [${sizes.join(", ")}] do not match the current architecture [${HEAD_SIZES.join(", ")}]`);
+    }
+    this.model = model;
   }
 
   async save(pathOrHandler: string | tf.io.IOHandler): Promise<void> {
@@ -143,17 +157,17 @@ export class NNModel {
       ]) as tf.Tensor[];
 
       return {
-        value:              (outputs[0].dataSync() as Float32Array)[0],
-        actionTypeLogits:   new Float32Array(outputs[1].dataSync()),
-        moveFraction:       new Float32Array(outputs[2].dataSync()),
-        disbandFraction:    new Float32Array(outputs[3].dataSync()),
-        recruitFraction:    (outputs[4].dataSync() as Float32Array)[0],
-        moveTargetLogits:   new Float32Array(outputs[5].dataSync()),
-        battleTargetLogits: new Float32Array(outputs[6].dataSync()),
-        battleSelect:       (outputs[7].dataSync() as Float32Array)[0],
-        commitFraction:     new Float32Array(outputs[8].dataSync()),
-        killFraction:       (outputs[9].dataSync() as Float32Array)[0],
-        battleRetreat:      (outputs[10].dataSync() as Float32Array)[0],
+        value:                 (outputs[0].dataSync() as Float32Array)[0],
+        actionTypeLogits:      new Float32Array(outputs[1].dataSync()),
+        moveFractionLogits:    new Float32Array(outputs[2].dataSync()),
+        disbandFractionLogits: new Float32Array(outputs[3].dataSync()),
+        recruitFractionLogits: new Float32Array(outputs[4].dataSync()),
+        moveTargetLogits:      new Float32Array(outputs[5].dataSync()),
+        battleTargetLogits:    new Float32Array(outputs[6].dataSync()),
+        battleSelect:          (outputs[7].dataSync() as Float32Array)[0],
+        commitFractionLogits:  new Float32Array(outputs[8].dataSync()),
+        killFractionLogits:    new Float32Array(outputs[9].dataSync()),
+        battleRetreat:         (outputs[10].dataSync() as Float32Array)[0],
       };
     });
   }
@@ -176,6 +190,16 @@ export class NNModel {
 }
 
 // ─── Utility functions ───
+
+export function softmax(logits: Float32Array): Float32Array {
+  let maxVal = -Infinity;
+  for (const v of logits) if (v > maxVal) maxVal = v;
+  const probs = Float32Array.from(logits, v => Math.exp(v - maxVal));
+  let sumExp = 0;
+  for (const p of probs) sumExp += p;
+  for (let i = 0; i < probs.length; i++) probs[i] /= sumExp;
+  return probs;
+}
 
 export function applyMaskAndSoftmax(logits: Float32Array, mask: Float32Array): Float32Array {
   const masked = new Float32Array(logits.length);
@@ -205,4 +229,14 @@ export function sampleFromProbs(probs: Float32Array): number {
   // must not pick a masked (zero-probability) option
   const lastLegal = probs.findLastIndex(p => p > 0);
   return lastLegal >= 0 ? lastLegal : probs.length - 1;
+}
+
+/** The logits of one group of a fraction head. */
+export function groupLogits(logits: Float32Array, group: number): Float32Array {
+  return logits.subarray(group * FRACTION_BINS, (group + 1) * FRACTION_BINS);
+}
+
+/** The most likely level of every group of a fraction head, as fractions. */
+export function argmaxFractions(logits: Float32Array, groups: number): Float32Array {
+  return Float32Array.from({length: groups}, (_, g) => binToFraction(argmax(groupLogits(logits, g))));
 }

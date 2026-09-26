@@ -1,10 +1,12 @@
-# Constants matching TypeScript definitions (v10, 11 heads + context shortcut,
+# Constants matching TypeScript definitions (v11, 11 heads + context shortcut,
 # context-free trunk consuming state[0:CONTEXT_OFFSET], categorical
-# action_type[3], move_target[16] and battle_target[17] heads, per-group
-# fraction heads move_fraction[4], disband_fraction[6], commit_fraction[3]).
+# action_type[3], move_target[16] and battle_target[17] heads, fraction heads
+# with FRACTION_BINS logits per unit group: move_fraction[4 groups],
+# disband_fraction[6], commit_fraction[3], recruit_fraction[1], kill_fraction[1]).
 # Must stay in sync with:
 #   src/AI/nn/StateEncoder.ts
 #   src/AI/nn/NNModel.ts
+#   src/AI/nn/FractionBins.ts
 #   training/src/SampleTypes.ts
 
 STATE_SIZE = 1360
@@ -13,6 +15,7 @@ NUM_ACTION_TYPES = 3  # EXIT, MOVE, DISBAND
 NUM_MOVE_GROUPS = 4
 NUM_DISBAND_GROUPS = 6
 NUM_COMMIT_GROUPS = 3
+FRACTION_BINS = 5  # levels 0, 0.25, 0.5, 0.75, 1 of every fraction head
 
 MOVE_TARGET_DIM = NUM_NODES        # 16 destination nodes
 BATTLE_TARGET_DIM = NUM_NODES + 1  # 16 nodes + stop
@@ -45,6 +48,8 @@ CTX_BRET_OFF = 275;   CTX_BRET_LEN = 17
 #   + killFraction(1) + killFracMask(1)
 #   + battleRetreat(1) + retreatMask(1)
 # Total: 1360 + 2 + 4 + 8 + 12 + 2 + 17 + 18 + 2 + 6 + 4 = 1435
+# Fraction targets are stored as fractions; the trainer maps each to its
+# nearest of the FRACTION_BINS levels.
 
 OFF_STATE = 0
 OFF_VALUE = STATE_SIZE                                    # 1360

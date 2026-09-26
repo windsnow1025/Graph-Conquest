@@ -1,4 +1,4 @@
-"""Train the model on binary sample data exported by TypeScript (v10, 11 heads).
+"""Train the model on binary sample data exported by TypeScript (v11, 11 heads).
 
 Usage:
   uv run python -m app.scripts.train --data path/to/samples.bin --model path/to/model/
@@ -28,7 +28,7 @@ def _fmt(total, heads):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train Graph Conquest NN v5")
+    parser = argparse.ArgumentParser(description="Train Graph Conquest NN v11")
     parser.add_argument("--data", nargs="+", required=True, help="Binary sample files")
     parser.add_argument("--model", required=True, help="TF.js model directory (read + write)")
     parser.add_argument("--epochs", type=int, default=10)
