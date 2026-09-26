@@ -187,12 +187,16 @@ default": an option is always chosen from the masked softmax. Passivity exists o
 explicit options (EXIT, stop, done) that must outscore the alternatives.
 
 Fraction heads (FractionBins.ts): a fraction is one of FRACTION_BINS = 5 levels
-(0, 0.25, 0.5, 0.75, 1) with a softmax per unit group. Argmax play takes the
-most likely level of each group; data generation samples each group at the
-temperature (or draws every group uniformly with probability ε), so a played
-level is an on-policy sample that the reinforcement phases reinforce with
-cross-entropy. The v10 sigmoid heads received no reinforcement gradient: their
-targets were their own outputs.
+(0, 0.25, 0.5, 0.75, 1) with a softmax per unit group. Deterministic play takes
+the expected level of each group (the mean of its softmax); data generation
+samples a level per group at the temperature (or draws every group uniformly
+with probability ε), so a played level is an on-policy sample that the
+reinforcement phases reinforce with cross-entropy. The v10 sigmoid heads
+received no reinforcement gradient: their targets were their own outputs.
+Decoding the most likely level instead of the expected one scored 48W 0L 33D
+over 81 games for the same imitation data (v10 regression: 71W 0L 10D): the
+labels of a state scatter over the levels and their mean is the count the
+labeler takes; with the expected level the same weights scored 69W 0L 12D.
 
 ## Decision Loop (TurnExecutor.ts, 4 phases)
 

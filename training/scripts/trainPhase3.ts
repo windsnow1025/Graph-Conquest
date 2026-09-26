@@ -101,7 +101,7 @@ async function main() {
   log(`Dataset: ${ds.games} games, W/L/D ${ds.wins}/${ds.losses}/${ds.draws}, avg turns ${ds.avgTurns}, simRev ${manifest.simRev}`);
 
   log("\nBaseline (Phase 2 model, unified):");
-  const baseline = await baselineEval(MODEL_DIR_PHASE2);
+  const baseline = await baselineEval(MODEL_DIR_PHASE2, false);
 
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, {recursive: true});
   const dataFile = path.join(DATA_DIR, "phase3.bin");

@@ -27,7 +27,7 @@ import {BattlePhase, BattleResult} from "../lib/Battle";
 import {calculateUnitsNeeded} from "../lib/Combat";
 import type {NNModel, NNPrediction} from "./nn/NNModel";
 import {
-  applyMaskAndSoftmax, softmax, argmax, argmaxFractions, groupLogits, sampleFromProbs, BATTLE_TARGET_DIM, BATTLE_TARGET_STOP,
+  applyMaskAndSoftmax, softmax, argmax, expectedFractions, groupLogits, sampleFromProbs, BATTLE_TARGET_DIM, BATTLE_TARGET_STOP,
 } from "./nn/NNModel";
 import {battleStuckReport} from "./battleReport";
 import {NODE_ORDER, NUM_NODES, UNIT_TYPES} from "./nn/GameIndex";
@@ -96,18 +96,19 @@ function chooseBinary(value: number, eps: number): {choice: boolean; explored: b
 }
 
 /**
- * Choose a level per group of a fraction head: with probability eps every
+ * Choose a fraction per group of a fraction head: with probability eps every
  * group is drawn uniformly (exploration, value label only), otherwise each
- * group samples its softmax at the temperature, or takes the argmax at temp=0.
+ * group samples a level from its softmax at the temperature, or takes its
+ * expected level at temp=0.
  */
 function chooseFractions(logits: Float32Array, groups: number, temp: number, eps: number): {value: Float32Array; explored: boolean} {
   if (eps > 0 && Math.random() < eps) {
     return {value: Float32Array.from({length: groups}, () => binToFraction(Math.floor(Math.random() * FRACTION_BINS))), explored: true};
   }
+  if (temp === 0) return {value: expectedFractions(logits, groups), explored: false};
   const value = new Float32Array(groups);
   for (let g = 0; g < groups; g++) {
-    const group = groupLogits(logits, g);
-    value[g] = binToFraction(temp > 0 ? sampleFromProbs(softmax(Float32Array.from(group, v => v / temp))) : argmax(group));
+    value[g] = binToFraction(sampleFromProbs(softmax(Float32Array.from(groupLogits(logits, g), v => v / temp))));
   }
   return {value, explored: false};
 }
@@ -337,7 +338,7 @@ function selectBattleArmies(
 
     options.forEach((o, i) => {
       opts.onDecision?.({playerIdx, state: o.state, pred: o.pred,
-        action: {type: "battleSelect", chosen: i === pick ? 1 : 0, commitFraction: i === pick && commit ? commit.value : argmaxFractions(o.pred.commitFractionLogits, NUM_COMMIT_GROUPS)},
+        action: {type: "battleSelect", chosen: i === pick ? 1 : 0, commitFraction: i === pick && commit ? commit.value : expectedFractions(o.pred.commitFractionLogits, NUM_COMMIT_GROUPS)},
         explored: explored || (i === pick && commit !== null && commit.explored)});
     });
 

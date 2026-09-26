@@ -33,7 +33,7 @@ import {
   moveGroups, commitGroups, disbandGroups, groupMask, countsToFractions, takeByFractions,
 } from "../../src/AI/nn/UnitGroups";
 import type {NNModel} from "../../src/AI/nn/NNModel";
-import {applyMaskAndSoftmax, argmax, argmaxFractions, BATTLE_TARGET_DIM, BATTLE_TARGET_STOP} from "../../src/AI/nn/NNModel";
+import {applyMaskAndSoftmax, argmax, expectedFractions, BATTLE_TARGET_DIM, BATTLE_TARGET_STOP} from "../../src/AI/nn/NNModel";
 import {battleStuckReport} from "../../src/AI/battleReport";
 import type {Sample} from "./SampleTypes";
 import {emptySample} from "./SampleTypes";
@@ -446,9 +446,9 @@ function* lookaheadArmyActions(game: GameSystem, playerIdx: number, samples: Sam
           execTarget = argmax(applyMaskAndSoftmax(movePred.moveTargetLogits, legalMask));
           const moveGroupMask = groupMask(moveGroups(army.getMoveCandidates(NODE_ORDER[execTarget], game.gameMap, game.enemyLocations)));
           const countPred = model.predict(encodeState(game, playerIdx, {type: "moveCount", army, destinationIdx: execTarget, groupMask: moveGroupMask}));
-          execFractions = argmaxFractions(countPred.moveFractionLogits, NUM_MOVE_GROUPS);
+          execFractions = expectedFractions(countPred.moveFractionLogits, NUM_MOVE_GROUPS);
         } else if (execAction === ACTION_DISBAND) {
-          execFractions = argmaxFractions(pred.disbandFractionLogits, NUM_DISBAND_GROUPS);
+          execFractions = expectedFractions(pred.disbandFractionLogits, NUM_DISBAND_GROUPS);
         }
       }
 
@@ -702,7 +702,7 @@ function lookaheadSelectArmies(
     if (model) {
       const preds = optionStates.map(st => model.predict(st));
       execPick = preds.reduce((best, p, i) => (p.battleSelect > preds[best].battleSelect ? i : best), 0);
-      execFractions = execPick < remaining.length ? argmaxFractions(preds[execPick].commitFractionLogits, NUM_COMMIT_GROUPS) : null;
+      execFractions = execPick < remaining.length ? expectedFractions(preds[execPick].commitFractionLogits, NUM_COMMIT_GROUPS) : null;
     }
 
     if (execPick === doneIdx || execFractions === null) break;
@@ -814,7 +814,7 @@ function* lookaheadRecruit(game: GameSystem, playerIdx: number, samples: Sample[
 
       // DAgger: NN decides actual fraction
       const execFrac = model
-        ? argmaxFractions(model.predict(encodeState(game, playerIdx, {type: "recruit", locationIdx: locIdx, unitType, affordableCount: affordable})).recruitFractionLogits, 1)[0]
+        ? expectedFractions(model.predict(encodeState(game, playerIdx, {type: "recruit", locationIdx: locIdx, unitType, affordableCount: affordable})).recruitFractionLogits, 1)[0]
         : bestFrac;
       const count = Math.round(execFrac * affordable);
       if (count > 0 && player.canBuy(unitType, count)) {

@@ -284,12 +284,14 @@ interface CachedEval extends EvalMetrics {
  * <modelDir>/eval81.json keyed by the weights md5, so every training run and
  * sweep cell is judged against the same number instead of a fresh noisy
  * 27-game read (win counts of the same model fluctuated 21W to 27W at 27
- * games). copyModelDir carries the cache along with the weights.
+ * games). copyModelDir carries the cache along with the weights. The cache
+ * does not see code changes that alter play with the same weights; `fresh`
+ * re-measures and overwrites it.
  */
-export async function baselineEval(modelDir: string): Promise<EvalMetrics> {
+export async function baselineEval(modelDir: string, fresh: boolean): Promise<EvalMetrics> {
   const cachePath = path.join(modelDir, "eval81.json");
   const md5 = weightsMd5(modelDir);
-  if (fs.existsSync(cachePath)) {
+  if (!fresh && fs.existsSync(cachePath)) {
     const cached = JSON.parse(fs.readFileSync(cachePath, "utf8")) as CachedEval;
     if (cached.weightsMd5 === md5 && cached.games === BASELINE_GAMES) {
       log(`  Baseline (cached, ${cached.games} games, ${cached.createdAt}): ` +

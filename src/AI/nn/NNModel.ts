@@ -236,7 +236,18 @@ export function groupLogits(logits: Float32Array, group: number): Float32Array {
   return logits.subarray(group * FRACTION_BINS, (group + 1) * FRACTION_BINS);
 }
 
-/** The most likely level of every group of a fraction head, as fractions. */
-export function argmaxFractions(logits: Float32Array, groups: number): Float32Array {
-  return Float32Array.from({length: groups}, (_, g) => binToFraction(argmax(groupLogits(logits, g))));
+/**
+ * The expected level of every group of a fraction head (the mean of its
+ * softmax), as fractions: the decoding of deterministic play. The most likely
+ * level decoded worse (48W 0L 33D vs 71W 0L 10D over 81 games for the same
+ * imitation data) because the labels of a state scatter over the levels and
+ * their mean, not their mode, is the count the labeler would take.
+ */
+export function expectedFractions(logits: Float32Array, groups: number): Float32Array {
+  return Float32Array.from({length: groups}, (_, g) => {
+    const probs = softmax(groupLogits(logits, g));
+    let mean = 0;
+    for (let bin = 0; bin < FRACTION_BINS; bin++) mean += probs[bin] * binToFraction(bin);
+    return mean;
+  });
 }
