@@ -7,7 +7,7 @@ import type Army from "../lib/Army";
 
 export function battleStuckReport(context: string, battle: Battle): string {
   const fmt = (armies: Army[]) => armies.map(a =>
-    `${a.unitType}(${a.units.length}u@${a.location} rng=${a.unitStats.range} attacks=${battle.getRemainingAttacks(a)}/${battle.maxArmyAttacks})`
+    `${a.unitType}(${a.battleUnits.length}/${a.units.length}u@${a.location} rng=${a.unitStats.range} attacks=${battle.getRemainingAttacks(a)}/${battle.maxArmyAttacks})`
   ).join(", ") || "(none)";
   return [
     `${context}: loc=${battle.targetLocation} round=${battle.round} phase=${battle.phase} result=${battle.result}`,

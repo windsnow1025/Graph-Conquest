@@ -6,6 +6,10 @@
  *   2. For each option: clone → execute → greedy rollout rest of turn → quantile
  *   3. Pick highest quantile
  *
+ * Per-group counts (move, commit, disband) are searched by `searchCounts`: the
+ * whole grid of per-group levels when it is small, otherwise coordinate descent
+ * from the all-in vector.
+ *
  * All lookahead functions are generators that yield after each real game action,
  * allowing the UI to render intermediate states.
  *
@@ -13,20 +17,32 @@
  */
 import GameSystem from "../../src/lib/GameSystem";
 import type Army from "../../src/lib/Army";
-import Battle, {BattlePhase, BattleResult} from "../../src/lib/Battle";
+import type Unit from "../../src/lib/Unit";
+import type Battle from "../../src/lib/Battle";
+import {BattlePhase, BattleResult} from "../../src/lib/Battle";
 import {calculateUnitsNeeded} from "../../src/lib/Combat";
-import {encodeState, NODE_ORDER, NUM_NODES, UNIT_TYPES} from "../../src/AI/nn/StateEncoder";
+import {NODE_ORDER, NUM_NODES, UNIT_TYPES} from "../../src/AI/nn/GameIndex";
+import {encodeState, perTypeState} from "../../src/AI/nn/StateEncoder";
+import type {DecisionContext} from "../../src/AI/nn/StateEncoder";
 import {
-  computeActionTypeMask, executeArmyAction,
-  ACTION_EXIT, ACTION_MOVE, ACTION_SPLIT, ACTION_DISBAND, NUM_ACTION_TYPES,
+  computeActionTypeMask, executeArmyAction, unitsToCommit,
+  ACTION_EXIT, ACTION_MOVE, ACTION_DISBAND,
 } from "../../src/AI/nn/ActionSpace";
+import {
+  NUM_UNIT_GROUPS, NUM_COMMIT_GROUPS,
+  moveGroups, commitGroups, disbandGroups, groupMask, countsToFractions, takeByFractions,
+} from "../../src/AI/nn/UnitGroups";
 import type {NNModel} from "../../src/AI/nn/NNModel";
 import {applyMaskAndSoftmax, argmax, BATTLE_TARGET_DIM, BATTLE_TARGET_STOP} from "../../src/AI/nn/NNModel";
 import {battleStuckReport} from "../../src/AI/battleReport";
 import type {Sample} from "./SampleTypes";
 import {emptySample} from "./SampleTypes";
 
-const MAX_STEPS_PER_ARMY = 10;
+/** All-in fractions, long enough for any group list. */
+const FULL_FRACTIONS = new Float32Array(NUM_UNIT_GROUPS).fill(1);
+
+/** Largest per-group grid that is searched exhaustively; larger grids use coordinate descent. */
+const EXHAUSTIVE_CAP = 27;
 
 /** Legal destination mask [16] for an army's current movable locations. */
 function moveLegalMask(game: GameSystem, army: Army): Float32Array {
@@ -86,63 +102,118 @@ function cloneBattle(game: GameSystem): {game: GameSystem; battle: Battle} {
   return {game: c, battle: c.currentBattle!};
 }
 
-// ─── Selection state helpers ───
+/** Every army with all of its attack-ready units. */
+function fullSelections(armies: Army[]): Map<Army, Unit[]> {
+  return new Map(armies.map(army => [army, army.attackCandidates]));
+}
 
-function computeSelState(selected: Army[]): number[] {
-  const r = new Array(6).fill(0);
-  const hpSums = [0, 0, 0];
-  for (const a of selected) {
-    const t = (UNIT_TYPES as readonly string[]).indexOf(a.unitType); if (t < 0) continue;
-    r[t * 2] += a.units.length;
-    hpSums[t] += a.units.reduce((s, u) => s + u.currentHealth / u.health, 0);
+/** The same selections on a clone: armies and units are matched by index. */
+function cloneSelections(game: GameSystem, clone: GameSystem, playerIdx: number, selections: Map<Army, Unit[]>): Map<Army, Unit[]> {
+  const player = game.players[playerIdx];
+  const clonePlayer = clone.players[playerIdx];
+  return new Map([...selections].map(([army, units]) => {
+    const cloneArmy = clonePlayer.armies[player.armies.indexOf(army)];
+    return [cloneArmy, units.map(unit => cloneArmy.units[army.units.indexOf(unit)])];
+  }));
+}
+
+// ─── Per-group count search ───
+
+/** Count levels of one group for the labeler: exact counts for groups of at most 2 units, otherwise none, half, all. */
+function groupLevels(size: number): number[] {
+  if (size <= 2) return Array.from({length: size + 1}, (_, i) => i);
+  return [0, Math.round(size / 2), size];
+}
+
+/**
+ * Search the per-group counts that maximise `evaluate`: the whole grid when it
+ * has at most EXHAUSTIVE_CAP vectors, otherwise two passes of coordinate
+ * descent from the all-in vector. The all-zero vector is never proposed (it is
+ * the EXIT option). Returns null when every group is empty.
+ */
+function searchCounts(groups: Unit[][], evaluate: (counts: number[]) => number): {counts: number[]; q: number} | null {
+  const levels = groups.map(group => groupLevels(group.length));
+  const gridSize = levels.reduce((n, l) => n * l.length, 1);
+  if (gridSize === 1) return null;
+
+  let bestCounts: number[] | null = null;
+  let bestQ = -Infinity;
+  const consider = (counts: number[]): boolean => {
+    if (counts.every(c => c === 0)) return false;
+    const q = evaluate(counts);
+    if (bestCounts !== null && q <= bestQ) return false;
+    bestCounts = [...counts];
+    bestQ = q;
+    return true;
+  };
+
+  if (gridSize <= EXHAUSTIVE_CAP) {
+    const index = new Array<number>(levels.length).fill(0);
+    for (let n = 0; n < gridSize; n++) {
+      consider(levels.map((l, g) => l[index[g]]));
+      for (let g = 0; g < levels.length; g++) {
+        if (++index[g] < levels[g].length) break;
+        index[g] = 0;
+      }
+    }
+  } else {
+    const counts = groups.map(group => group.length);
+    consider(counts);
+    for (let pass = 0; pass < 2; pass++) {
+      for (let g = 0; g < levels.length; g++) {
+        for (const level of levels[g]) {
+          if (level === counts[g]) continue;
+          const trial = [...counts];
+          trial[g] = level;
+          if (consider(trial)) counts[g] = level;
+        }
+      }
+    }
   }
-  for (let t = 0; t < 3; t++) { r[t * 2 + 1] = r[t * 2] > 0 ? hpSums[t] / r[t * 2] : 0; }
-  return r;
+  return bestCounts === null ? null : {counts: bestCounts, q: bestQ};
 }
 
 // ─── Simple greedy (no rollout, used inside rollout) ───
 
-// No lineage budgets needed here: simple greedy only takes an action when it
-// strictly raises the quantile, and SPLIT/MERGE leave every score unchanged,
-// so it can never enter the SPLIT/MERGE object-mint loop.
+// Terminates without a step budget: every MOVE spends at least one move point
+// and every DISBAND removes at least one unit.
 function simpleArmyActions(game: GameSystem, playerIdx: number): void {
   const player = game.players[playerIdx];
-  const processed = new Set<object>();
+  const processed = new Set<Army>();
   let ai = 0;
   while (ai < player.armies.length) {
     const army = player.armies[ai];
     if (processed.has(army)) { ai++; continue; }
     processed.add(army);
-    for (let step = 0; step < MAX_STEPS_PER_ARMY; step++) {
-      if (army.units.length === 0) break;
-      const mask = computeActionTypeMask(game, player, army);
+    for (;;) {
+      const mask = computeActionTypeMask(game, army);
       const armyIdx = player.armies.indexOf(army);
-      let bestAction = ACTION_EXIT, bestTarget = 0, bestFraction = 0;
+      let bestAction = ACTION_EXIT, bestTarget = 0, bestFractions = FULL_FRACTIONS;
       let bestQ = quantile(game, playerIdx);
-      for (let a = 0; a < NUM_ACTION_TYPES; a++) {
-        if (mask[a] === 0 || a === ACTION_EXIT) continue;
-        if (a === ACTION_MOVE) {
-          for (const dest of army.getMovableLocations(game.gameMap, game.enemyLocations)) {
-            const ni = NODE_ORDER.indexOf(dest); if (ni < 0) continue;
-            const c = cloneGame(game); const ca = c.players[playerIdx].armies[armyIdx]; if (!ca) continue;
-            executeArmyAction(c, c.players[playerIdx], ca, a, ni, 0);
-            const q = quantile(c, playerIdx);
-            if (q > bestQ) { bestQ = q; bestAction = a; bestTarget = ni; }
-          }
-        } else if (a === ACTION_SPLIT) {
-          for (const f of [0.2, 0.5]) { const c = cloneGame(game); const ca = c.players[playerIdx].armies[armyIdx]; if (!ca) continue; executeArmyAction(c, c.players[playerIdx], ca, a, 0, f); const q = quantile(c, playerIdx); if (q > bestQ) { bestQ = q; bestAction = a; bestFraction = f; } }
-        } else if (a === ACTION_DISBAND) {
-          for (const f of [0.3, 0.5, 1.0]) { const c = cloneGame(game); const ca = c.players[playerIdx].armies[armyIdx]; if (!ca) continue; executeArmyAction(c, c.players[playerIdx], ca, a, 0, f); const q = quantile(c, playerIdx); if (q > bestQ) { bestQ = q; bestAction = a; bestFraction = f; } }
-        } else {
-          const c = cloneGame(game); const ca = c.players[playerIdx].armies[armyIdx]; if (!ca) continue;
-          executeArmyAction(c, c.players[playerIdx], ca, a, 0, 0);
-          const q = quantile(c, playerIdx); if (q > bestQ) { bestQ = q; bestAction = a; }
+
+      const tryAction = (actionType: number, targetIdx: number, fractions: Float32Array): number => {
+        const c = cloneGame(game);
+        if (!executeArmyAction(c, c.players[playerIdx].armies[armyIdx], actionType, targetIdx, fractions)) return -Infinity;
+        return quantile(c, playerIdx);
+      };
+
+      // Moving a part of the reachable units scores the same as moving all of them
+      // (the score reads node ownership), so only the all-in move is tried
+      if (mask[ACTION_MOVE] > 0) {
+        for (const dest of army.getMovableLocations(game.gameMap, game.enemyLocations)) {
+          const ni = NODE_ORDER.indexOf(dest);
+          const q = tryAction(ACTION_MOVE, ni, FULL_FRACTIONS);
+          if (q > bestQ) { bestQ = q; bestAction = ACTION_MOVE; bestTarget = ni; bestFractions = FULL_FRACTIONS; }
         }
+      }
+      for (const f of [0.3, 0.5, 1.0]) {
+        const fractions = new Float32Array(NUM_UNIT_GROUPS).fill(f);
+        const q = tryAction(ACTION_DISBAND, 0, fractions);
+        if (q > bestQ) { bestQ = q; bestAction = ACTION_DISBAND; bestFractions = fractions; }
       }
 
       if (bestAction === ACTION_EXIT) break;
-      const fraction = bestAction === ACTION_SPLIT || bestAction === ACTION_DISBAND ? bestFraction : 0;
-      if (!executeArmyAction(game, player, army, bestAction, bestTarget, fraction)) break;
+      if (!executeArmyAction(game, army, bestAction, bestTarget, bestFractions)) break;
       const newIdx = player.armies.indexOf(army); if (newIdx < 0) break; ai = newIdx;
     }
     const finalIdx = player.armies.indexOf(army);
@@ -155,8 +226,7 @@ function simpleBattleAllocate(_game: GameSystem, battle: Battle, isAttacker: boo
   for (const army of [...armies]) {
     if (!battle.canAct(army) || battle.result !== BattleResult.Ongoing) continue;
     const targets = battle.getTargetsInRange(army);
-    if (targets.length === 0) continue;
-    let remaining = army.units.length;
+    let remaining = army.battleUnits.length;
     const allocations = new Map<Army, number>();
     for (const target of targets) {
       if (remaining <= 0) break;
@@ -203,7 +273,7 @@ function simpleBattlePhase(game: GameSystem, playerIdx: number, excludeLocations
       const c = cloneGame(game);
       const cCandidates = c.getArmiesInRange(location);
       if (cCandidates.length === 0) continue;
-      const battle = c.startBattle(location, cCandidates);
+      const battle = c.startBattle(location, fullSelections(cCandidates));
       if (!battle) continue;
       simpleBattleLoop(c, battle);
       c.resolveBattle();
@@ -216,12 +286,7 @@ function simpleBattlePhase(game: GameSystem, playerIdx: number, excludeLocations
         if (selected.length <= 1) break;
         const without = selected.filter(a => a !== army);
         const cW = cloneGame(game);
-        const cWCands = without.map(a => {
-          const idx = game.currentPlayer.armies.indexOf(a);
-          return cW.players[playerIdx].armies[idx];
-        }).filter(Boolean);
-        if (cWCands.length === 0) continue;
-        const bW = cW.startBattle(location, cWCands);
+        const bW = cW.startBattle(location, cloneSelections(game, cW, playerIdx, fullSelections(without)));
         if (!bW) continue;
         simpleBattleLoop(cW, bW);
         cW.resolveBattle();
@@ -233,7 +298,7 @@ function simpleBattlePhase(game: GameSystem, playerIdx: number, excludeLocations
       }
 
       if (selected.length === 0) continue;
-      const realBattle = game.startBattle(location, selected);
+      const realBattle = game.startBattle(location, fullSelections(selected));
       if (!realBattle) continue;
       simpleBattleLoop(game, realBattle);
       game.resolveBattle();
@@ -295,63 +360,56 @@ function simpleRollout(game: GameSystem, playerIdx: number, fromPhase: number, e
 
 function* lookaheadArmyActions(game: GameSystem, playerIdx: number, samples: Sample[] | null, rolloutFrom = 2, model?: NNModel | null): Generator<void> {
   const player = game.players[playerIdx];
-  const processed = new Set<object>();
-  // Step budgets are conserved across split/merge lineages: a split child
-  // inherits the parent's remaining steps and merges never refund, so the
-  // phase total is bounded even when the executed policy splits endlessly.
-  const budgets = new Map<Army, number>();
-  for (const a of player.armies) budgets.set(a, MAX_STEPS_PER_ARMY);
+  const processed = new Set<Army>();
   let ai = 0;
   while (ai < player.armies.length) {
     const army = player.armies[ai];
     if (processed.has(army)) { ai++; continue; }
     processed.add(army);
-    let remaining = budgets.get(army) ?? MAX_STEPS_PER_ARMY;
-    while (remaining > 0) {
-      if (army.units.length === 0) break;
-      remaining--;
-      const mask = computeActionTypeMask(game, player, army);
+    for (;;) {
+      const mask = computeActionTypeMask(game, army);
+      const disbandMask = groupMask(disbandGroups(army.units));
       const armyIdx = player.armies.indexOf(army);
 
       // EXIT baseline with rollout
       const cExit = cloneGame(game);
       simpleRollout(cExit, playerIdx, rolloutFrom);
       let bestQ = quantile(cExit, playerIdx);
-      let bestAction = ACTION_EXIT, bestTarget = 0, bestFraction = 0;
+      let bestAction = ACTION_EXIT, bestTarget = 0;
+      let bestFractions: Float32Array = new Float32Array(NUM_UNIT_GROUPS);
 
-      const tryOption = (a: number, targetIdx: number, frac: number) => {
+      const tryAction = (actionType: number, targetIdx: number, fractions: Float32Array): number => {
         const c = cloneGame(game);
-        const ca = c.players[playerIdx].armies[armyIdx];
-        if (!ca) return;
-        if (!executeArmyAction(c, c.players[playerIdx], ca, a, targetIdx, frac)) return;
+        if (!executeArmyAction(c, c.players[playerIdx].armies[armyIdx], actionType, targetIdx, fractions)) return -Infinity;
         simpleRollout(c, playerIdx, rolloutFrom);
-        const q = quantile(c, playerIdx);
-        if (q > bestQ) { bestQ = q; bestAction = a; bestTarget = targetIdx; bestFraction = frac; }
+        return quantile(c, playerIdx);
       };
 
-      for (let a = 0; a < NUM_ACTION_TYPES; a++) {
-        if (mask[a] === 0 || a === ACTION_EXIT) continue;
-        if (a === ACTION_MOVE) {
-          for (const dest of army.getMovableLocations(game.gameMap, game.enemyLocations)) {
-            const ni = NODE_ORDER.indexOf(dest); if (ni >= 0) tryOption(a, ni, 0);
+      if (mask[ACTION_MOVE] > 0) {
+        for (const dest of army.getMovableLocations(game.gameMap, game.enemyLocations)) {
+          const ni = NODE_ORDER.indexOf(dest);
+          const groups = moveGroups(army.getMoveCandidates(dest, game.gameMap, game.enemyLocations));
+          const result = searchCounts(groups, counts => tryAction(ACTION_MOVE, ni, countsToFractions(groups, counts)));
+          if (result && result.q > bestQ) {
+            bestQ = result.q; bestAction = ACTION_MOVE; bestTarget = ni; bestFractions = countsToFractions(groups, result.counts);
           }
-        } else if (a === ACTION_SPLIT) {
-          for (const f of [0.2, 0.5]) tryOption(a, 0, f);
-        } else if (a === ACTION_DISBAND) {
-          for (const f of [0.3, 0.5, 1.0]) tryOption(a, 0, f);
-        } else {
-          tryOption(a, 0, 0);
+        }
+      }
+      {
+        const groups = disbandGroups(army.units);
+        const result = searchCounts(groups, counts => tryAction(ACTION_DISBAND, 0, countsToFractions(groups, counts)));
+        if (result && result.q > bestQ) {
+          bestQ = result.q; bestAction = ACTION_DISBAND; bestFractions = countsToFractions(groups, result.counts);
         }
       }
 
       // Record
       if (samples) {
         const s = emptySample(playerIdx);
-        s.state = encodeState(game, playerIdx, {type: "army", army, actionTypeMask: mask});
+        s.state = encodeState(game, playerIdx, {type: "army", army, actionTypeMask: mask, disbandMask});
         s.actionTypeTarget = bestAction;
         s.actionTypeMask = new Float32Array(mask);
-        if (bestAction === ACTION_SPLIT) { s.splitFraction = bestFraction; s.splitMask = 1; }
-        if (bestAction === ACTION_DISBAND) { s.disbandFraction = bestFraction; s.disbandMask = 1; }
+        if (bestAction === ACTION_DISBAND) { s.disbandFraction = bestFractions; s.disbandMask = disbandMask; }
         s.value = bestQ;
         samples.push(s);
 
@@ -363,32 +421,36 @@ function* lookaheadArmyActions(game: GameSystem, playerIdx: number, samples: Sam
           ms.moveMask = legalMask;
           ms.value = bestQ;
           samples.push(ms);
+
+          const moveGroupMask = groupMask(moveGroups(army.getMoveCandidates(NODE_ORDER[bestTarget], game.gameMap, game.enemyLocations)));
+          const cs = emptySample(playerIdx);
+          cs.state = encodeState(game, playerIdx, {type: "moveCount", army, destinationIdx: bestTarget, groupMask: moveGroupMask});
+          cs.moveFraction = bestFractions;
+          cs.moveFractionMask = moveGroupMask;
+          cs.value = bestQ;
+          samples.push(cs);
         }
       }
 
       // Decide what to actually execute: NN (DAgger) or greedy
-      let execAction = bestAction, execTarget = bestTarget, execFraction = bestFraction;
+      let execAction = bestAction, execTarget = bestTarget, execFractions = bestFractions;
       if (model) {
-        const pred = model.predict(encodeState(game, playerIdx, {type: "army", army, actionTypeMask: mask}));
-        const probs = applyMaskAndSoftmax(pred.actionTypeLogits, mask);
-        execAction = argmax(probs);
+        const pred = model.predict(encodeState(game, playerIdx, {type: "army", army, actionTypeMask: mask, disbandMask}));
+        execAction = argmax(applyMaskAndSoftmax(pred.actionTypeLogits, mask));
         if (execAction === ACTION_MOVE) {
           const legalMask = moveLegalMask(game, army);
           const movePred = model.predict(encodeState(game, playerIdx, {type: "moveTarget", army, legalMask}));
           execTarget = argmax(applyMaskAndSoftmax(movePred.moveTargetLogits, legalMask));
+          const moveGroupMask = groupMask(moveGroups(army.getMoveCandidates(NODE_ORDER[execTarget], game.gameMap, game.enemyLocations)));
+          const countPred = model.predict(encodeState(game, playerIdx, {type: "moveCount", army, destinationIdx: execTarget, groupMask: moveGroupMask}));
+          execFractions = countPred.moveFraction;
+        } else if (execAction === ACTION_DISBAND) {
+          execFractions = pred.disbandFraction;
         }
-        execFraction = execAction === ACTION_SPLIT ? pred.splitFraction : pred.disbandFraction;
       }
 
       if (execAction === ACTION_EXIT) break;
-      const fraction = execAction === ACTION_SPLIT || execAction === ACTION_DISBAND ? execFraction : 0;
-      const armiesBefore = execAction === ACTION_SPLIT ? new Set(player.armies) : null;
-      if (!executeArmyAction(game, player, army, execAction, execTarget, fraction)) break;
-      if (armiesBefore) {
-        for (const a of player.armies) {
-          if (!armiesBefore.has(a)) budgets.set(a, remaining); // split child inherits remaining budget
-        }
-      }
+      if (!executeArmyAction(game, army, execAction, execTarget, execFractions)) break;
       yield; // UI update after each action
       const newIdx = player.armies.indexOf(army); if (newIdx < 0) break; ai = newIdx;
     }
@@ -404,8 +466,7 @@ function* lookaheadBattleAllocate(
   for (const army of [...armies]) {
     if (!battle.canAct(army) || battle.result !== BattleResult.Ongoing) continue;
     const targets = battle.getTargetsInRange(army);
-    if (targets.length === 0) continue;
-    let remaining = army.units.length;
+    let remaining = army.battleUnits.length;
     const allocations = new Map<Army, number>();
 
     for (let ti = 0; ti < targets.length; ti++) {
@@ -547,23 +608,17 @@ function* lookaheadBattleLoop(
 }
 
 /**
- * Simulate attacking `location` with a subset of the player's armies
- * (all in-range armies when subset is null), then rollout from phase 3.
+ * Simulate attacking `location` with the given selections (all in-range armies
+ * with all their attack-ready units when null), then rollout from phase 3.
  * Returns the resulting quantile, or null if the battle cannot start.
  */
-function evalBattle(game: GameSystem, playerIdx: number, location: string, armies: Army[] | null): number | null {
+function evalBattle(game: GameSystem, playerIdx: number, location: string, selections: Map<Army, Unit[]> | null): number | null {
   const c = cloneGame(game);
-  let cArmies: Army[];
-  if (armies === null) {
-    cArmies = c.getArmiesInRange(location);
-  } else {
-    cArmies = armies.map(a => {
-      const idx = game.players[playerIdx].armies.indexOf(a);
-      return c.players[playerIdx].armies[idx];
-    }).filter(Boolean) as Army[];
-  }
-  if (cArmies.length === 0) return null;
-  const b = c.startBattle(location, cArmies);
+  const cSelections = selections === null
+    ? fullSelections(c.getArmiesInRange(location))
+    : cloneSelections(game, c, playerIdx, selections);
+  if (cSelections.size === 0) return null;
+  const b = c.startBattle(location, cSelections);
   if (!b) return null;
   simpleBattleLoop(c, b);
   c.resolveBattle();
@@ -573,40 +628,53 @@ function evalBattle(game: GameSystem, playerIdx: number, location: string, armie
 
 /**
  * Additive army selection with per-step labels.
- * Each step: evaluate adding each remaining army (and "done" once one army is
- * committed), label the argmax, record one sample per option, and execute the
- * greedy choice (or the NN's choice in DAgger mode).
+ * Each step: evaluate adding each remaining army at its best per-group
+ * commitment (and "done" once one army is committed), label the argmax, record
+ * one sample per option, and execute the greedy choice (or the NN's choice in
+ * DAgger mode).
  */
 function lookaheadSelectArmies(
   game: GameSystem, playerIdx: number, location: string, targetNodeIdx: number,
   candidates: Army[], samples: Sample[] | null, model?: NNModel | null,
-): Army[] {
-  const selected: Army[] = [];
+): Map<Army, Unit[]> {
+  const selected = new Map<Army, Unit[]>();
   const remaining = [...candidates];
 
   while (remaining.length > 0) {
-    const selectedPerType = computeSelState(selected);
-    const remainingPerType = computeSelState(remaining);
-    const doneIdx = selected.length > 0 ? remaining.length : -1;
+    const selectedPerType = perTypeState(selected);
+    const remainingPerType = perTypeState(remaining.map(army => [army, army.attackCandidates] as const));
+    const doneIdx = selected.size > 0 ? remaining.length : -1;
 
-    const optionQ: number[] = remaining.map(a => {
-      const q = evalBattle(game, playerIdx, location, [...selected, a]);
-      return q === null ? -Infinity : q;
+    // Each candidate at its best commitment given the current selection
+    const options = remaining.map((army): {q: number; fractions: Float32Array; commitMask: Float32Array} => {
+      const groups = commitGroups(army.attackCandidates);
+      const result = searchCounts(groups, counts => {
+        const units = takeByFractions(groups, countsToFractions(groups, counts), false);
+        return evalBattle(game, playerIdx, location, new Map([...selected, [army, units] as [Army, Unit[]]])) ?? -Infinity;
+      });
+      return {
+        q: result ? result.q : -Infinity,
+        fractions: result ? countsToFractions(groups, result.counts) : new Float32Array(NUM_COMMIT_GROUPS),
+        commitMask: groupMask(groups),
+      };
     });
+    const optionQ = options.map(o => o.q);
     if (doneIdx >= 0) {
       optionQ.push(evalBattle(game, playerIdx, location, selected) ?? -Infinity);
     }
 
     const labelPick = optionQ.reduce((best, q, i) => (q > optionQ[best] ? i : best), 0);
 
-    const optionStates: Float32Array[] = remaining.map(a =>
-      encodeState(game, playerIdx, {
-        type: "battleSelect", army: a, targetNodeIdx, selectedPerType, remainingPerType, isDone: false,
-      })
-    );
+    const optionStates: Float32Array[] = remaining.map((army, i) => {
+      const context: DecisionContext = {
+        type: "battleSelect", army, targetNodeIdx, selectedPerType, remainingPerType, isDone: false, commitMask: options[i].commitMask,
+      };
+      return encodeState(game, playerIdx, context);
+    });
     if (doneIdx >= 0) {
       optionStates.push(encodeState(game, playerIdx, {
         type: "battleSelect", army: null, targetNodeIdx, selectedPerType, remainingPerType, isDone: true,
+        commitMask: new Float32Array(NUM_COMMIT_GROUPS),
       }));
     }
 
@@ -616,20 +684,27 @@ function lookaheadSelectArmies(
         ss.state = optionStates[i];
         ss.battleSelect = i === labelPick ? 1 : 0;
         ss.battleSelectMask = 1;
+        if (i < remaining.length) {
+          ss.commitFraction = options[i].fractions;
+          ss.commitMask = options[i].commitMask;
+        }
         ss.value = optionQ[labelPick];
         samples.push(ss);
       }
     }
 
-    // DAgger: NN picks the option to execute
+    // DAgger: NN picks the option to execute and its commitment
     let execPick = labelPick;
+    let execFractions: Float32Array | null = execPick < remaining.length ? options[execPick].fractions : null;
     if (model) {
-      const scores = optionStates.map(st => model.predict(st).battleSelect);
-      execPick = scores.reduce((best, s, i) => (s > scores[best] ? i : best), 0);
+      const preds = optionStates.map(st => model.predict(st));
+      execPick = preds.reduce((best, p, i) => (p.battleSelect > preds[best].battleSelect ? i : best), 0);
+      execFractions = execPick < remaining.length ? preds[execPick].commitFraction : null;
     }
 
-    if (execPick === doneIdx) break;
-    selected.push(remaining[execPick]);
+    if (execPick === doneIdx || execFractions === null) break;
+    const army = remaining[execPick];
+    selected.set(army, unitsToCommit(army, execFractions));
     remaining.splice(execPick, 1);
   }
 
@@ -691,7 +766,7 @@ function* lookaheadBattlePhase(game: GameSystem, playerIdx: number, samples: Sam
     if (candidates.length === 0) continue;
 
     const selected = lookaheadSelectArmies(game, playerIdx, location, execChoice, candidates, samples, model);
-    if (selected.length === 0) continue;
+    if (selected.size === 0) continue;
 
     const realBattle = game.startBattle(location, selected);
     if (!realBattle) continue;
@@ -709,8 +784,6 @@ function* lookaheadRecruit(game: GameSystem, playerIdx: number, samples: Sample[
     const locIdx = NODE_ORDER.indexOf(location);
     if (locIdx < 0) continue;
     for (const unitType of UNIT_TYPES) {
-      // At the army cap the engine rejects the recruit; skip so no sample is recorded for it
-      if (game.countArmiesOfTypeAtLocation(player, unitType, location) >= game.maxArmiesPerTypeAtNode(location)) continue;
       const cost = game.unitStatsMap[unitType].cost;
       const affordable = Math.floor(player.money / cost);
       if (affordable <= 0) continue;

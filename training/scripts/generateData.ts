@@ -15,9 +15,10 @@
  *     phase 3 training data.
  *
  *   npx tsx training/scripts/generateData.ts imitation --out <name>
- *       [--passive 10] [--random 70] [--greedy 10] [--dagger 10]
+ *       [--passive 10] [--random 70] [--greedy 10] [--dagger 10] [--dagger-model phase1]
  *     Greedy-labeled imitation samples (finished samples, no consumer-side
- *     transform); phase 1 training data.
+ *     transform); phase 1 training data. DAgger games are played by
+ *     --dagger-model (a fresh random model without it) and labeled by greedy.
  *
  *   --force overwrites an existing dataset of the same name.
  */
@@ -51,7 +52,7 @@ function usage(): never {
     "Usage:",
     "  generateData.ts vs-random --out <name> [--games 500] [--model phase1] [--temperature 1.0] [--epsilon 0.1]",
     "  generateData.ts mixed --out <name> [--games-opp 100] [--games-self 100] [--model phase2] [--temperature 1.0] [--epsilon 0.1]",
-    "  generateData.ts imitation --out <name> [--passive 10] [--random 70] [--greedy 10] [--dagger 10]",
+    "  generateData.ts imitation --out <name> [--passive 10] [--random 70] [--greedy 10] [--dagger 10] [--dagger-model phase1]",
     "  --force to overwrite an existing dataset",
   ].join("\n"));
   process.exit(1);
@@ -251,11 +252,13 @@ async function generateImitation(name: string, dir: string, opts: Map<string, st
 
   const writer = createSampleWriter(path.join(dir, "samples.bin"));
   const stats: GameStats = {wins: 0, losses: 0, draws: 0, turnsSum: 0};
-  // DAgger uses a fresh random-weight model, matching the phase 1 bootstrap start
-  const daggerModel = new NNModel();
-  daggerModel.buildNew();
+  // DAgger plays with --dagger-model, or with a fresh random-weight model (the phase 1 bootstrap start)
+  const daggerModelName = opts.get("dagger-model");
+  const dagger = daggerModelName ? await loadModel(daggerModelName) : null;
+  const daggerModel = dagger ? dagger.model : new NNModel();
+  if (!dagger) daggerModel.buildNew();
 
-  log(`\nGenerating imitation data: ${schedule.length} games (${counts.passive} vs passive, ${counts.random} vs random, ${counts.greedy} vs greedy, ${counts.dagger} DAgger)`);
+  log(`\nGenerating imitation data: ${schedule.length} games (${counts.passive} vs passive, ${counts.random} vs random, ${counts.greedy} vs greedy, ${counts.dagger} DAgger with ${daggerModelName ?? "a fresh model"})`);
   for (let g = 0; g < schedule.length; g++) {
     const opType = schedule[g];
     const game = createRandomizedGame();
@@ -302,7 +305,7 @@ async function generateImitation(name: string, dir: string, opts: Map<string, st
   return {
     name, type: "imitation", format: "sample", createdAt: new Date().toISOString(), simRev: gitRev(),
     params: {...counts, maxTurns: MAX_TURNS},
-    model: null,
+    model: daggerModelName && dagger ? {name: daggerModelName, weightsMd5: weightsMd5(dagger.dir)} : null,
     opponents: [{name: "passive"}, {name: "random"}, {name: "greedy"}],
     stateDim: encodeState(createRandomizedGame(), 0).length,
     stats: {games: schedule.length, records: 0, snapshots: 0, samples, ...finishStats(stats, schedule.length)},

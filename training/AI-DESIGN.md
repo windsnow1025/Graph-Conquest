@@ -7,9 +7,11 @@ src/AI/
   index.ts              # Entry point: loads NN model, exposes aiTakeTurn/aiTurnSteps/greedyTurnStepsUI
   TurnExecutor.ts       # 4-phase NN decision loop (generator)
   nn/
-    StateEncoder.ts     # State → Float32Array[1148], 7 decision contexts
-    NNModel.ts          # TF.js model v8: per-head context shortcut, 10 output heads
-    ActionSpace.ts      # 5 action types, masks, execution
+    GameIndex.ts        # Fixed index order of the map nodes and the unit types
+    UnitGroups.ts       # (remainingMoves, canAttack) unit groups, the unit of per-group decisions
+    StateEncoder.ts     # State → Float32Array[1360], 8 decision contexts
+    NNModel.ts          # TF.js model v10: per-head context shortcut, 11 output heads
+    ActionSpace.ts      # 3 action types, masks, per-group execution
 
 training/
   scripts/
@@ -21,7 +23,7 @@ training/
     test/               # Model comparison / value-head evaluation scripts
   src/
     Opponents.ts        # random/passive opponents (same 4-phase loop as NN)
-    GreedyAI.ts         # 1-step lookahead + rollout, quantile scoring, DAgger support
+    GreedyAI.ts         # 1-step lookahead + rollout, quantile scoring, per-group count search, DAgger support
     SampleTypes.ts      # Sample interface and binary serialization
     SelfPlay.ts         # RL game runners with recording (pure simulation)
     TrajectoryStore.ts  # Persistent datasets: traj format, manifests, λ materialization
@@ -30,8 +32,8 @@ training/
     trainUtils.ts       # Shared utilities, paths, constants
   python/
     app/
-      config.py         # Binary format offsets (SAMPLE_FLOATS=1203)
-      model.py          # PyTorch GraphConquestNN (10 heads, mirrors NNModel.ts)
+      config.py         # Binary format offsets (SAMPLE_FLOATS=1435)
+      model.py          # PyTorch GraphConquestNN (11 heads, mirrors NNModel.ts)
       trainer.py        # Train/eval with policyWeight-weighted losses
       export_tfjs.py    # PyTorch ↔ TF.js weight conversion
       data_io.py        # Read binary sample files
@@ -84,61 +86,99 @@ npx tsx training/scripts/generateData.ts mixed --out mix-p2-v1
 npx tsx training/scripts/trainPhase3.ts mix-p2-v1
 ```
 
-## Input Encoding (StateEncoder.ts, 1148 features)
+## Unit Groups (UnitGroups.ts)
+
+Turn state lives on units: `remainingMoves`, `canAttack`, `inBattle`. One army
+per (player, node, unit type) holds units in mixed states, and a move, a
+battle commitment or a disbanding takes a subset of them. The AI works on the
+discrete part of that state, the **unit group** (remainingMoves, canAttack):
+
+```
+group = remainingMoves * 2 + (canAttack ? 0 : 1)
+  0: 0 moves, can attack     1: 0 moves, cannot attack
+  2: 1 move,  can attack     3: 1 move,  cannot attack
+  4: 2 moves, can attack     5: 2 moves, cannot attack
+```
+
+Units of one army in the same group differ only in health, so the encoder
+reports a unit count per group and the fraction heads output one fraction per
+group. Which units of a group realise a count is fixed: the healthiest first
+for moving and committing, the weakest first for disbanding (health
+distribution is the one part of the unit state the fixed-size encoding does
+not carry).
+
+Decision-specific group lists:
+- **move** (4): groups 2..5, the units with at least one move; a group is
+  eligible for a destination when its moves reach it
+- **commit** (3): groups 0, 2, 4, the attack-ready units by remaining moves
+- **disband** (6): all groups
+
+A per-group count is `round(fraction × group size)`; a selection that rounds
+to nothing takes one unit from the group with the highest fraction, so a
+chosen action always acts on at least one unit.
+
+## Input Encoding (StateEncoder.ts, 1360 features)
 
 1. **Game config** (5): interestRate/0.10, upkeepRate/0.20, turnCount/100, maxTurns/100, maxArmyAttacks/20
 2. **Unit type stats** (18): 3 types × 6 stats (attack/9, defend/3, health/20, range/2, speed/2, cost/2)
 3. **Player stats** (21): 3 players (self, opp1, opp2) × 7 (money/200, nodeIncome/68, interest/10, upkeep/20, totalUnits/200, nodeCount/16, defeated)
-4. **Per-node** (880): 16 nodes × 55 (income/10, canRecruit, owner[4], 4 factions × 3 types × 2 (units/(100/cost), avgHp), 3 types × armyCount/4, 3 types × 2 (maxMoves/2, canAttack), distance[16])
-5. **Context** (224): decision type one-hot[7] + 7 context blocks (inactive = all 0)
+4. **Per-node** (1024): 16 nodes × 64 (income/10, canRecruit, owner[4], 4 factions × 3 types × 2 (units/(100/cost), avgHp), 3 types × own units per group[6], distance[16])
+5. **Context** (292): decision type one-hot[8] + 8 context blocks (inactive = all 0)
+
+Unit counts are scaled by cost/100 (units per 100 money). **Army info** (27),
+shared by the army, moveTarget, moveCount and battleSelect blocks:
+location[16] + type[3] + units + avgHp + units per group[6].
 
 Context blocks:
 - **recruit** (20): location[16] + type[3] + affordable/(200/cost)
-- **army** (28): location[16] + type[3] + units/(100/cost) + avgHp + moves/2 + canAttack + actionMask[5]
-- **moveTarget** (39): army info(23) + legal destination mask[16]
+- **army** (36): army info(27) + actionMask[3] + disbandMask[6] (non-empty disband groups)
+- **moveTarget** (43): army info(27) + legal destination mask[16]
+- **moveCount** (47): army info(27) + destination[16] + move group mask[4] (groups that reach the destination)
 - **battleTarget** (16): attackable node mask[16]
-- **battleSelect** (51): army info(22, zeroed for the done option) + targetNode[16] + selectedPerType[6] + remainingPerType[6] + isDone(1)
-- **battleAllocate** (46): myArmy(22) + enemyArmy(21) + attackProgress + isAttacker + unitsNeeded/500
+- **battleSelect** (59): army info(27, zeroed for the done option) + targetNode[16] + selectedPerType[6] (committed units) + remainingPerType[6] (attack-ready units of the remaining candidates) + isDone(1) + commitMask[3]
+- **battleAllocate** (46): myArmy(22) + enemyArmy(21) + attackProgress + isAttacker + unitsNeeded/500; unit counts and health are those of the battle contingents
 - **battleRetreat** (17): targetNode[16] + attackProgress
 
 All features centered: value -= 0.5.
 
-## Output Heads (NNModel.ts, 10 heads)
+## Output Heads (NNModel.ts, 11 heads)
 
-Architecture v9: context-free trunk with per-head context shortcut. The encoder
-still emits 1148 features; the trunk consumes only the context-free core
-state[0:924], so the value head (trunk only) is a pure state value whose TD
+Architecture v10: context-free trunk with per-head context shortcut. The encoder
+emits 1360 features; the trunk consumes only the context-free core
+state[0:1068], so the value head (trunk only) is a pure state value whose TD
 differences are not polluted by decision-context switches. Policy heads receive
 the decision type and their own context block via shortcut inputs.
 
 ```
-state_core[924] → Dense(1024,ReLU) → Dense(256,ReLU) = trunk[256]
+state_core[1068] → Dense(1024,ReLU) → Dense(256,ReLU) = trunk[256]
 
 Each head: concat(trunk, relevant_context) → Dense(64,ReLU) → output
   - value:            trunk only (no context)
-  - action_type:      trunk + ctx_dt[7] + ctx_army[28]
-  - split_fraction:   trunk + ctx_dt[7] + ctx_army[28]
-  - disband_fraction: trunk + ctx_dt[7] + ctx_army[28]
-  - recruit_fraction: trunk + ctx_dt[7] + ctx_rec[20]
-  - move_target:      trunk + ctx_dt[7] + ctx_mov[39]
-  - battle_target:    trunk + ctx_dt[7] + ctx_btgt[16]
-  - battle_select:    trunk + ctx_dt[7] + ctx_bsel[51]
-  - kill_fraction:    trunk + ctx_dt[7] + ctx_balloc[46]
-  - battle_retreat:   trunk + ctx_dt[7] + ctx_bret[17]
+  - action_type:      trunk + ctx_dt[8] + ctx_army[36]
+  - move_fraction:    trunk + ctx_dt[8] + ctx_mcnt[47]
+  - disband_fraction: trunk + ctx_dt[8] + ctx_army[36]
+  - recruit_fraction: trunk + ctx_dt[8] + ctx_rec[20]
+  - move_target:      trunk + ctx_dt[8] + ctx_mov[43]
+  - battle_target:    trunk + ctx_dt[8] + ctx_btgt[16]
+  - battle_select:    trunk + ctx_dt[8] + ctx_bsel[59]
+  - commit_fraction:  trunk + ctx_dt[8] + ctx_bsel[59]
+  - kill_fraction:    trunk + ctx_dt[8] + ctx_balloc[46]
+  - battle_retreat:   trunk + ctx_dt[8] + ctx_bret[17]
 ```
 
 | # | Head | Size | Activation | Decision type |
 |---|------|------|------------|---------------|
 | 0 | value | 1 | sigmoid | all (position quality) |
-| 1 | actionType | 5 | linear | army (EXIT/MERGE/MOVE/SPLIT/DISBAND), masked softmax |
-| 2 | splitFraction | 1 | sigmoid | army (SPLIT) |
-| 3 | disbandFraction | 1 | sigmoid | army (DISBAND) |
+| 1 | actionType | 3 | linear | army (EXIT/MOVE/DISBAND), masked softmax |
+| 2 | moveFraction | 4 | sigmoid | moveCount (fraction per move group) |
+| 3 | disbandFraction | 6 | sigmoid | army (DISBAND, fraction per disband group) |
 | 4 | recruitFraction | 1 | sigmoid | recruit |
 | 5 | moveTarget | 16 | linear | moveTarget (destination node, masked softmax over legal) |
 | 6 | battleTarget | 17 | linear | battleTarget (attackable node or stop, masked softmax) |
 | 7 | battleSelect | 1 | sigmoid | battleSelect (score per option, argmax over {armies, done}) |
-| 8 | killFraction | 1 | sigmoid | battleAllocate (fraction of killNeeded) |
-| 9 | battleRetreat | 1 | sigmoid | battleRetreat (retreat?) |
+| 8 | commitFraction | 3 | sigmoid | battleSelect (fraction per commit group of the chosen army) |
+| 9 | killFraction | 1 | sigmoid | battleAllocate (fraction of killNeeded) |
+| 10 | battleRetreat | 1 | sigmoid | battleRetreat (retreat?) |
 
 Categorical decisions (actionType/moveTarget/battleTarget) never produce "no action by
 default": an option is always chosen from the masked softmax. Passivity exists only as
@@ -148,10 +188,12 @@ explicit options (EXIT, stop, done) that must outscore the alternatives.
 
 ```
 Phase 1: Army actions (pre-battle)
-  For each army:
+  For each army, until EXIT:
     Select action type via masked softmax → argmax (temperature sample in training)
-    If MOVE: masked softmax over 16 destination logits → one destination (always resolves)
-    Execute action (MERGE/MOVE/SPLIT/DISBAND)
+    If MOVE: masked softmax over 16 destination logits → one destination (always resolves),
+             then moveFraction → units per move group that reach it
+    If DISBAND: disbandFraction → units per disband group
+    Execute action (MOVE/DISBAND)
 
 Phase 2: Battle loop
   fought = {}
@@ -160,14 +202,15 @@ Phase 2: Battle loop
     stop → phase ends
     node → select armies autoregressively:
       Each step: score every remaining candidate (battleSelect head) plus a
-      "done" option (only offered after the first army); pick argmax.
-      A chosen node is therefore always attacked with ≥1 army.
+      "done" option (only offered after the first army); pick argmax; the
+      chosen army commits its attack-ready units by the commitFraction of the
+      same prediction. A chosen node is therefore always attacked with ≥1 army.
     Start battle → battle rounds:
       Attacker turn: retreat check (battleRetreat), then allocate:
-        For each army × each enemy: killFraction
+        For each army × each enemy: killFraction (bounded by the battle contingent)
         Overflow logic: if future enemies can't consume remaining,
           ask AI → if fraction < overflowPct → system auto-fills all
-      Defender turn: neutral/defeated auto-play, or AI allocate
+      Defender turn: neutral/defeated defenders are played by the engine, else AI allocate
     Resolve battle, add node to fought
 
 Phase 3: Army actions (post-battle)
@@ -179,6 +222,10 @@ Phase 4: Recruitment
 
 endTurn
 ```
+
+The army loops need no step budget: every MOVE spends at least one move point
+and every DISBAND removes at least one unit. Units that move into an army
+already processed in the phase do not act again until the next army phase.
 
 ## Scoring Function
 
@@ -202,15 +249,30 @@ Two-layer architecture:
 **Simple greedy** (inner, used inside rollouts):
 - Each decision point: clone → try each option → quantile → pick best
 - No further lookahead (prevents recursion)
+- MOVE is tried all-in only (a partial move scores the same, the score reads
+  node ownership); battles commit every attack-ready unit
 
 **Lookahead greedy** (outer, the actual turn):
 - Each decision: clone → try option → rollout (complete the remaining turn phases with simple greedy) → quantile → pick best
 - Recruit: rollout additionally simulates the player's next turn (simpleNextTurn)
 - Battle target: per step, simulate attacking each candidate node with all in-range armies; label = argmax over {nodes, skip}; the chosen node is attacked first (best-first order)
-- Battle select: additive per step, simulate adding each remaining army (and stopping with the current selection); label = argmax; one sample per option
+- Battle select: additive per step, evaluate adding each remaining army at its
+  best per-group commitment (and stopping with the current selection); label =
+  argmax; one sample per option, each army option also labelled with its
+  commitment
 - Battle allocate also records **defender** samples (isAttacker=false) for training
 
-**DAgger mode**: NN plays the game (encounters its own states), greedy provides labels at each decision point. Addresses distribution shift between greedy's states and NN's states.
+**Per-group count search** (`searchCounts`), used for MOVE, DISBAND and
+commitment labels:
+- Levels per group: exact counts for groups of at most 2 units, otherwise
+  none / half / all
+- The whole grid is evaluated when it has at most 27 vectors, otherwise two
+  passes of coordinate descent from the all-in vector; the all-zero vector is
+  never proposed (it is the EXIT option)
+- Labels are stored as fractions of the group size, which the executor turns
+  back into the same counts
+
+**DAgger mode**: NN plays the game (encounters its own states), greedy provides labels at each decision point. Addresses distribution shift between greedy's states and NN's states. `generateData.ts imitation --dagger-model <name>` plays the DAgger games with a trained model (a fresh random-weight model without it). A second imitation round on 50 such games plus 70 greedy games did not help in this design: the model trained on it scored 16W 0L 11D over 27 games vs Random against 21W 0L 6D for the model trained on the 100-game greedy dataset alone, so phase 1 uses the default dataset.
 
 **Config variance** (±25%, all phases + tests): unit stats (attack, defend, health, cost), node income, interest rate, upkeep rate, player starting money. Range and speed not randomized. Each game gets independent Graph clone. Shared via `createRandomizedGame()` in trainUtils.
 
@@ -225,7 +287,15 @@ All phases consume a named dataset from the store and do not simulate.
 2. Value target = game outcome (win=1, loss=0, draw=1/3; draw = uniform prior over 3 players, so drawn games carry no positive advantage)
 3. 3 value-only samples per game (all players' perspectives)
 4. Policy weight = 1 (pure imitation)
-5. Python trains with --fresh flag (50 epochs)
+5. Python trains with --fresh (50 epochs) and --balance-actions 1 (env
+   ACTION_BALANCE): the action-type loss is weighted by the inverse class
+   frequency to that power, because MOVE is about 1 label in 6 and unweighted
+   training under-learns it (MOVE recall 0.37 on the training set; the model
+   then never occupies the nodes it clears and draws by hoarding). Measured on
+   the 100-game default dataset, 27 games vs Random on the default config:
+   power 1 gives 21W 0L 6D (MOVE recall 0.83), power 0.5 gives 14W 0L 13D
+   (MOVE recall 0.65); DISBAND is over-predicted at power 1 (precision 0.06)
+   without costing games
 6. Output: training/model/phase1/
 
 **Phase 2 — Reinforcement (scripts/trainPhase2.ts <vs-random dataset>)**:
@@ -265,17 +335,43 @@ All phases consume a named dataset from the store and do not simulate.
 5. Loads Phase 2 model, trains 4 epochs (20 degraded in one iteration historically)
 6. Output: training/model/phase3/
 
-## Binary Sample Format (1203 floats per sample)
+## Results of the v10 Run (2026-09-26)
+
+Evaluations are argmax play vs Random; "81 randomized" is the unified baseline
+(trainUtils.baselineEval, ±25% config variance), "27 default" is
+scripts/test/testOnly.ts on the default config.
+
+| Model | 81 randomized | 27 default |
+|-------|---------------|------------|
+| Greedy (GreedyAI.ts) | not run | 27W 0L 0D, avg win turn 5.3 |
+| Phase 1, 100-game dataset, 50 epochs, action balance 1 (published) | 71W 0L 10D, avg win turn 15.4 (an earlier read: 68W 0L 13D) | 21W 0L 6D, avg win turn 13.8 |
+| Phase 1, 200-game dataset, 80 epochs, action balance 1 | 53W 0L 28D, avg win turn 12.7 | 22W 0L 5D, avg win turn 13.9 |
+
+Draws are games the model dominates without occupying the opponents' last
+recruit nodes; it never loses to Random. With exploration (T=1, ε=0.1) the
+published model won 486 of 500 vs-random games.
+
+Both reinforcement phases were gated out for both phase 1 models: phase 2 gave
+39W 0L 42D from the 68W baseline (rollback) and 52W from the 53W baseline
+(no gain); phase 3 gave 44W from 53W (rollback) and 7W 0L 74D from 71W
+(rollback, the draw attractor). The per-group fraction heads receive no policy
+gradient in these phases (their targets are the model's own outputs, so the
+head losses start at 0), and the categorical heads' losses rise during the
+4 epochs. training/model/phase1, phase2 and phase3 therefore all hold the
+published phase 1 model.
+
+## Binary Sample Format (1435 floats per sample)
 
 ```
-state[1148] + value(1) + policyWeight(1)
-+ actionTypeTarget(1) + actionTypeMask[5]
-+ splitFraction(1) + splitMask(1)
-+ disbandFraction(1) + disbandMask(1)
+state[1360] + value(1) + policyWeight(1)
++ actionTypeTarget(1) + actionTypeMask[3]
++ moveFraction[4] + moveFractionMask[4]
++ disbandFraction[6] + disbandMask[6]
 + recruitFraction(1) + recruitMask(1)
 + moveTargetIdx(1) + moveMask[16]
 + battleTargetIdx(1) + battleTargetMask[17]
 + battleSelect(1) + battleSelectMask(1)
++ commitFraction[3] + commitMask[3]
 + killFraction(1) + killFracMask(1)
 + battleRetreat(1) + retreatMask(1)
 ```
@@ -284,4 +380,6 @@ moveTargetIdx / battleTargetIdx are class indices (-1 = no label); their masks l
 the legal options (battleTargetMask[16] = stop, always 1). Both train with masked
 cross-entropy. battleSelect rows are per-option (chosen = 1, others = 0, one row per
 candidate army plus the done option) and train with BCE; inference takes the argmax
-across the step's option scores.
+across the step's option scores. The per-group fraction heads train with MSE per
+group, masked by the group masks (a group mask marks the groups the decision could
+draw from; the RL recorder reads the masks back from the recorded state).

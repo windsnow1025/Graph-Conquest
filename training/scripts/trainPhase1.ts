@@ -9,7 +9,8 @@
  *
  * Usage: npx tsx training/scripts/trainPhase1.ts <dataset>
  *   <dataset>: an imitation dataset from the trajectory store
- * Env: EPOCHS (default 50)
+ * Env: EPOCHS (default 50), ACTION_BALANCE (default 1: inverse class frequency
+ *   power on the action-type loss, 0 = off)
  */
 import {setupBackend} from "../src/setupBackend";
 import * as fs from "fs";
@@ -26,6 +27,13 @@ import {
 const EPOCHS = Number(process.env.EPOCHS ?? "50");
 if (!Number.isFinite(EPOCHS) || EPOCHS < 1) {
   throw new Error(`Invalid EPOCHS env value: ${process.env.EPOCHS}`);
+}
+// MOVE is about 1 army label in 6 and DISBAND rarer still; unweighted training
+// under-learns MOVE (recall 0.37 on the training set) and the model then never
+// occupies the nodes it clears
+const ACTION_BALANCE = Number(process.env.ACTION_BALANCE ?? "1");
+if (!Number.isFinite(ACTION_BALANCE) || ACTION_BALANCE < 0) {
+  throw new Error(`Invalid ACTION_BALANCE env value: ${process.env.ACTION_BALANCE}`);
 }
 
 // ─── Main ───
@@ -62,7 +70,7 @@ async function main() {
   log("\nBaseline (before training):");
   await testNNvsRandom(MODEL_DIR_PHASE1);
 
-  const ok = await trainWithPython(dataFile, MODEL_DIR_PHASE1, EPOCHS, samples, true);
+  const ok = await trainWithPython(dataFile, MODEL_DIR_PHASE1, EPOCHS, samples, true, ACTION_BALANCE);
   if (!ok) {
     log("Training failed.");
     return;

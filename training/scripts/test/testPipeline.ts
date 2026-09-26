@@ -10,7 +10,7 @@
  */
 import {setupBackend} from "../../src/setupBackend";
 import {NNModel, BATTLE_TARGET_DIM} from "../../../src/AI/nn/NNModel";
-import {NUM_NODES} from "../../../src/AI/nn/StateEncoder";
+import {NUM_NODES} from "../../../src/AI/nn/GameIndex";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {greedyTurn, daggerTurn} from "../../src/GreedyAI";
@@ -58,9 +58,10 @@ function validateSamples(samples: Sample[], label: string): void {
     if (s.killFracMask === 1) counts.kfr++;
     if (s.retreatMask === 1) counts.ret++;
     if (s.recruitMask === 1) counts.rec++;
+    const hasGroupLabel = s.moveFractionMask.some(m => m > 0) || s.disbandMask.some(m => m > 0) || s.commitMask.some(m => m > 0);
     if (s.actionTypeTarget < 0 && s.moveTargetIdx < 0 && s.battleTargetIdx < 0
       && !s.battleSelectMask && !s.killFracMask && !s.retreatMask && !s.recruitMask
-      && !s.splitMask && !s.disbandMask) counts.valueOnly++;
+      && !hasGroupLabel) counts.valueOnly++;
   }
   log(`  ${label}: ${samples.length} samples ` +
     `(act=${counts.action} mov=${counts.move} btgt=${counts.btgt} bsel=${counts.bsel} ` +
@@ -182,7 +183,7 @@ async function main() {
   exportSamples(allSamples, dataFile);
   log(`\n4. Exported ${allSamples.length} samples → ${dataFile}`);
 
-  const ok = await trainWithPython(dataFile, SMOKE_MODEL_DIR, 2, allSamples.length, true);
+  const ok = await trainWithPython(dataFile, SMOKE_MODEL_DIR, 2, allSamples.length, true, 0);
   assert(ok, "python training failed");
 
   // ── 5. Reload exported model, play a full game ──

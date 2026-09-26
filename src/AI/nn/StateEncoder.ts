@@ -1,62 +1,80 @@
 /**
- * State encoder v9.
+ * State encoder v10.
  *
  * Encoding order:
  *   1. Game config (5)
  *   2. Unit type stats (18): 3 types × 6 stats
  *   3. Player stats (21): 3 players × 7
- *   4. Per-node (880): 16 nodes × 55
- *   5. Context (224):
- *      - decision type one-hot (7)
+ *   4. Per-node (1024): 16 nodes × 64
+ *   5. Context (292):
+ *      - decision type one-hot (8)
  *      - recruit (20)
- *      - army (28)
- *      - moveTarget (39): army info(23) + legal destination mask(16)
+ *      - army (36): army info(27) + action type mask(3) + disband group mask(6)
+ *      - moveTarget (43): army info(27) + legal destination mask(16)
+ *      - moveCount (47): army info(27) + destination(16) + move group mask(4)
  *      - battleTarget (16): attackable node mask
- *      - battleSelect (51): army info(22) + target node(16) + selection state(12) + isDone(1)
+ *      - battleSelect (59): army info(27) + target node(16) + selection state(12) + isDone(1) + commit group mask(3)
  *      - battleAllocate (46)
  *      - battleRetreat (17)
  *
- * Total: 5 + 18 + 21 + 880 + 224 = 1148 features.
+ * Army info (27): location(16) + type(3) + units + avgHp + units per group(6).
+ * Unit counts are scaled by cost/100 (units per 100 money).
+ *
+ * Total: 5 + 18 + 21 + 1024 + 292 = 1360 features.
  */
 import type GameSystem from "../../lib/GameSystem";
 import type Army from "../../lib/Army";
+import type Unit from "../../lib/Unit";
 import type Graph from "../../lib/Graph";
 import type {DefaultUnitName} from "../../lib/data/DefaultUnitStatsMap.ts";
+import {NODE_ORDER, NUM_NODES, UNIT_TYPES, NUM_UNIT_TYPES} from "./GameIndex";
+import {NUM_UNIT_GROUPS, NUM_MOVE_GROUPS, NUM_COMMIT_GROUPS, NUM_DISBAND_GROUPS, groupCounts} from "./UnitGroups";
+import {NUM_ACTION_TYPES} from "./ActionSpace";
 
-export const NODE_ORDER: string[] = [
-  "Blue Home", "Blue to Center", "B to G", "B to R",
-  "Red Home", "Red to Center", "R to B", "R to G",
-  "Green Home", "Green to Center", "G to R", "G to B",
-  "Gate RB", "Gate GB", "Gate RG", "Center",
-];
-
-export const NUM_NODES = 16;
-export const UNIT_TYPES: DefaultUnitName[] = ["Infantry", "Archer", "Cavalry"];
-export const NUM_UNIT_TYPES = 3;
+export const DECISION_TYPES = [
+  "recruit", "army", "moveTarget", "moveCount", "battleTarget", "battleSelect", "battleAllocate", "battleRetreat",
+] as const;
+export type DecisionType = typeof DECISION_TYPES[number];
+const NUM_DECISION_TYPES = DECISION_TYPES.length;
 
 // Feature dimensions
 const GAME_CONFIG_FEATURES = 5;
 const UNIT_STATS_FEATURES = 18;
 const PLAYER_STATS_FEATURES = 21;
-const PER_NODE_FEATURES = 55;
+const PER_NODE_FEATURES = 2 + 4 + 4 * NUM_UNIT_TYPES * 2 + NUM_UNIT_TYPES * NUM_UNIT_GROUPS + NUM_NODES; // 64
+const ARMY_INFO_FEATURES = NUM_NODES + NUM_UNIT_TYPES + 2 + NUM_UNIT_GROUPS; // 27
+const SELECTION_STATE_FEATURES = 2 * NUM_UNIT_TYPES * 2; // selected and remaining, per type (units, avgHp)
 const RECRUIT_CONTEXT = 20;
-const ARMY_CONTEXT = 28;          // features(23) + action_type_mask(5)
-const MOVE_TARGET_CONTEXT = 39;   // army info(23) + legal destination mask(16)
-const BATTLE_TARGET_CONTEXT = 16; // attackable node mask
-const BATTLE_SELECT_CONTEXT = 51; // army info(22) + target node(16) + selection state(12) + isDone(1)
+const ARMY_CONTEXT = ARMY_INFO_FEATURES + NUM_ACTION_TYPES + NUM_DISBAND_GROUPS;        // 36
+const MOVE_TARGET_CONTEXT = ARMY_INFO_FEATURES + NUM_NODES;                             // 43
+const MOVE_COUNT_CONTEXT = ARMY_INFO_FEATURES + NUM_NODES + NUM_MOVE_GROUPS;            // 47
+const BATTLE_TARGET_CONTEXT = NUM_NODES;                                                // 16
+const BATTLE_SELECT_CONTEXT = ARMY_INFO_FEATURES + NUM_NODES + SELECTION_STATE_FEATURES + 1 + NUM_COMMIT_GROUPS; // 59
 const BATTLE_ALLOCATE_CONTEXT = 46;
 const BATTLE_RETREAT_CONTEXT = 17;
-const CONTEXT_FEATURES = 7 + RECRUIT_CONTEXT + ARMY_CONTEXT + MOVE_TARGET_CONTEXT
-  + BATTLE_TARGET_CONTEXT + BATTLE_SELECT_CONTEXT + BATTLE_ALLOCATE_CONTEXT
-  + BATTLE_RETREAT_CONTEXT; // 224
 const MAX_DISTANCE = 6; // diameter of the default map (home to opposite gate); unreachable encodes as 1.0 too
 
-export const STATE_SIZE =
-  GAME_CONFIG_FEATURES +
-  UNIT_STATS_FEATURES +
-  PLAYER_STATS_FEATURES +
-  NUM_NODES * PER_NODE_FEATURES +
-  CONTEXT_FEATURES; // 1148
+// Context layout: the trunk consumes state[0:CTX_BASE], each head reads its own block
+export const CTX_BASE = GAME_CONFIG_FEATURES + UNIT_STATS_FEATURES + PLAYER_STATS_FEATURES + NUM_NODES * PER_NODE_FEATURES; // 1068
+export const CTX_DT_OFF = 0;                                 export const CTX_DT_LEN = NUM_DECISION_TYPES;       // 8
+export const CTX_REC_OFF = CTX_DT_OFF + CTX_DT_LEN;          export const CTX_REC_LEN = RECRUIT_CONTEXT;         // 20
+export const CTX_ARMY_OFF = CTX_REC_OFF + CTX_REC_LEN;       export const CTX_ARMY_LEN = ARMY_CONTEXT;           // 36
+export const CTX_MOV_OFF = CTX_ARMY_OFF + CTX_ARMY_LEN;      export const CTX_MOV_LEN = MOVE_TARGET_CONTEXT;     // 43
+export const CTX_MCNT_OFF = CTX_MOV_OFF + CTX_MOV_LEN;       export const CTX_MCNT_LEN = MOVE_COUNT_CONTEXT;     // 47
+export const CTX_BTGT_OFF = CTX_MCNT_OFF + CTX_MCNT_LEN;     export const CTX_BTGT_LEN = BATTLE_TARGET_CONTEXT;  // 16
+export const CTX_BSEL_OFF = CTX_BTGT_OFF + CTX_BTGT_LEN;     export const CTX_BSEL_LEN = BATTLE_SELECT_CONTEXT;  // 59
+export const CTX_BALLOC_OFF = CTX_BSEL_OFF + CTX_BSEL_LEN;   export const CTX_BALLOC_LEN = BATTLE_ALLOCATE_CONTEXT; // 46
+export const CTX_BRET_OFF = CTX_BALLOC_OFF + CTX_BALLOC_LEN; export const CTX_BRET_LEN = BATTLE_RETREAT_CONTEXT; // 17
+const CONTEXT_FEATURES = CTX_BRET_OFF + CTX_BRET_LEN; // 292
+
+export const STATE_SIZE = CTX_BASE + CONTEXT_FEATURES; // 1360
+
+// Mask positions inside their blocks (legality is read back from recorded states)
+export const ARMY_ACTION_MASK_OFF = ARMY_INFO_FEATURES;
+export const ARMY_DISBAND_MASK_OFF = ARMY_ACTION_MASK_OFF + NUM_ACTION_TYPES;
+export const MOV_LEGAL_MASK_OFF = ARMY_INFO_FEATURES;
+export const MCNT_GROUP_MASK_OFF = ARMY_INFO_FEATURES + NUM_NODES;
+export const BSEL_COMMIT_MASK_OFF = ARMY_INFO_FEATURES + NUM_NODES + SELECTION_STATE_FEATURES + 1;
 
 // ─── Precomputed distance matrix cache ───
 let cachedDistMatrix: Float32Array | null = null;
@@ -88,13 +106,21 @@ export interface RecruitContext {
 export interface ArmyContext {
   type: "army";
   army: Army;
-  actionTypeMask: Float32Array; // [5]
+  actionTypeMask: Float32Array; // [3]
+  disbandMask: Float32Array;    // [6] 1 = non-empty disband group
 }
 
 export interface MoveTargetContext {
   type: "moveTarget";
   army: Army;
   legalMask: Float32Array; // [16] 1 = legal destination, choice is softmax over these
+}
+
+export interface MoveCountContext {
+  type: "moveCount";
+  army: Army;
+  destinationIdx: number;
+  groupMask: Float32Array; // [4] 1 = move group that can reach the destination
 }
 
 export interface BattleTargetContext {
@@ -106,9 +132,10 @@ export interface BattleSelectContext {
   type: "battleSelect";
   army: Army | null;          // null for the "done" option
   targetNodeIdx: number;
-  selectedPerType: number[];  // [6] = 3 × (units, avgHp)
-  remainingPerType: number[]; // [6] = 3 × (units, avgHp)
+  selectedPerType: number[];  // [6] = 3 × (committed units, avgHp)
+  remainingPerType: number[]; // [6] = 3 × (attack-ready units of the remaining candidates, avgHp)
   isDone: boolean;            // true = this option means "stop adding armies"
+  commitMask: Float32Array;   // [3] 1 = non-empty commit group; all 0 for the "done" option
 }
 
 export interface BattleAllocateContext {
@@ -131,6 +158,7 @@ export type DecisionContext =
   | RecruitContext
   | ArmyContext
   | MoveTargetContext
+  | MoveCountContext
   | BattleTargetContext
   | BattleSelectContext
   | BattleAllocateContext
@@ -150,11 +178,39 @@ function encodeArmyType(buf: Float32Array, offset: number, army: Army): number {
   return offset + 3;
 }
 
-function encodeArmyHp(army: Army): number {
-  if (army.units.length === 0) return 0;
+function encodeUnitsHp(units: Unit[]): number {
+  if (units.length === 0) return 0;
   let sum = 0;
-  for (const u of army.units) sum += u.currentHealth / u.health;
-  return sum / army.units.length;
+  for (const u of units) sum += u.currentHealth / u.health;
+  return sum / units.length;
+}
+
+/** Army info (27): location(16) + type(3) + units + avgHp + units per group(6). */
+function encodeArmyInfo(buf: Float32Array, offset: number, game: GameSystem, army: Army): number {
+  offset = encodeArmyLocation(buf, offset, army);
+  offset = encodeArmyType(buf, offset, army);
+  const armyCost = game.unitStatsMap[army.unitType].cost;
+  buf[offset++] = army.units.length / (100 / armyCost);
+  buf[offset++] = encodeUnitsHp(army.units);
+  const counts = groupCounts(army.units);
+  for (let g = 0; g < NUM_UNIT_GROUPS; g++) buf[offset++] = counts[g] / (100 / armyCost);
+  return offset;
+}
+
+/** Per unit type, the unit count and average health ratio of the given (army, units) entries: [units, avgHp] × 3. */
+export function perTypeState(entries: Iterable<readonly [Army, Unit[]]>): number[] {
+  const state = new Array<number>(NUM_UNIT_TYPES * 2).fill(0);
+  const hpSums = new Array<number>(NUM_UNIT_TYPES).fill(0);
+  for (const [army, units] of entries) {
+    const t = (UNIT_TYPES as readonly string[]).indexOf(army.unitType);
+    state[t * 2] += units.length;
+    for (const unit of units) hpSums[t] += unit.currentHealth / unit.health;
+  }
+  for (let t = 0; t < NUM_UNIT_TYPES; t++) {
+    const units = state[t * 2];
+    state[t * 2 + 1] = units > 0 ? hpSums[t] / units : 0;
+  }
+  return state;
 }
 
 // ─── Main encoder ───
@@ -223,7 +279,7 @@ export function encodeState(
     buf[offset++] = p.defeated ? 1 : 0;
   }
 
-  // ─── 4. Per-node features (16 × 55 = 880) ───
+  // ─── 4. Per-node features (16 × 64 = 1024) ───
   for (let ni = 0; ni < NUM_NODES; ni++) {
     const nodeName = NODE_ORDER[ni];
     const owner = game.nodeOwnership.get(nodeName) ?? null;
@@ -263,27 +319,12 @@ export function encodeState(
       }
     }
 
+    // Own units per (remaining moves, can attack) group, per type
     for (let t = 0; t < NUM_UNIT_TYPES; t++) {
-      let armyCount = 0;
-      for (const army of self.armies) {
-        if (army.location === nodeName && army.unitType === UNIT_TYPES[t]) {
-          armyCount++;
-        }
-      }
-      buf[offset++] = armyCount / 4;
-    }
-
-    for (let t = 0; t < NUM_UNIT_TYPES; t++) {
-      let maxMoves = 0;
-      let canAttack = 0;
-      for (const army of self.armies) {
-        if (army.location === nodeName && army.unitType === UNIT_TYPES[t]) {
-          if (army.remainingMoves > maxMoves) maxMoves = army.remainingMoves;
-          if (army.canAttack) canAttack = 1;
-        }
-      }
-      buf[offset++] = maxMoves / 2;
-      buf[offset++] = canAttack;
+      const army = self.getArmy(nodeName, UNIT_TYPES[t]);
+      const unitCost = game.unitStatsMap[UNIT_TYPES[t]].cost;
+      const counts = army ? groupCounts(army.units) : new Array<number>(NUM_UNIT_GROUPS).fill(0);
+      for (let g = 0; g < NUM_UNIT_GROUPS; g++) buf[offset++] = counts[g] / (100 / unitCost);
     }
 
     const rowBase = ni * NUM_NODES;
@@ -292,15 +333,13 @@ export function encodeState(
     }
   }
 
-  // ─── 5. Context (224) ───
+  // ─── 5. Context (292) ───
 
-  // Decision type one-hot (7): recruit | army | moveTarget | battleTarget | battleSelect | battleAllocate | battleRetreat
-  const decisionTypes = ["recruit", "army", "moveTarget", "battleTarget", "battleSelect", "battleAllocate", "battleRetreat"] as const;
+  // Decision type one-hot (8)
   if (context) {
-    const idx = decisionTypes.indexOf(context.type);
-    if (idx >= 0) buf[offset + idx] = 1;
+    buf[offset + DECISION_TYPES.indexOf(context.type)] = 1;
   }
-  offset += 7;
+  offset += NUM_DECISION_TYPES;
 
   // ── recruit (20): location[16] + type[3] + affordable[1] ──
   if (context?.type === "recruit") {
@@ -317,37 +356,36 @@ export function encodeState(
     offset += RECRUIT_CONTEXT;
   }
 
-  // ── army (28): features(23) + actionTypeMask[5] ──
+  // ── army (36): armyInfo(27) + actionTypeMask[3] + disbandMask[6] ──
   if (context?.type === "army") {
-    const army = context.army;
-    offset = encodeArmyLocation(buf, offset, army);
-    offset = encodeArmyType(buf, offset, army);
-    const armyCost = game.unitStatsMap[army.unitType].cost;
-    buf[offset++] = army.units.length / (100 / armyCost);
-    buf[offset++] = encodeArmyHp(army);
-    buf[offset++] = army.remainingMoves / 2;
-    buf[offset++] = army.canAttack ? 1 : 0;
-    for (let i = 0; i < 5; i++) buf[offset++] = context.actionTypeMask[i];
+    offset = encodeArmyInfo(buf, offset, game, context.army);
+    for (let i = 0; i < NUM_ACTION_TYPES; i++) buf[offset++] = context.actionTypeMask[i];
+    for (let i = 0; i < NUM_DISBAND_GROUPS; i++) buf[offset++] = context.disbandMask[i];
   } else {
     offset += ARMY_CONTEXT;
   }
 
-  // ── moveTarget (39): armyInfo(23) + legalDestinationMask[16] ──
+  // ── moveTarget (43): armyInfo(27) + legalDestinationMask[16] ──
   if (context?.type === "moveTarget") {
-    const army = context.army;
-    offset = encodeArmyLocation(buf, offset, army);
-    offset = encodeArmyType(buf, offset, army);
-    const armyCost = game.unitStatsMap[army.unitType].cost;
-    buf[offset++] = army.units.length / (100 / armyCost);
-    buf[offset++] = encodeArmyHp(army);
-    buf[offset++] = army.remainingMoves / 2;
-    buf[offset++] = army.canAttack ? 1 : 0;
+    offset = encodeArmyInfo(buf, offset, game, context.army);
     for (let i = 0; i < NUM_NODES; i++) {
       buf[offset + i] = context.legalMask[i] > 0 ? 1 : 0;
     }
     offset += 16;
   } else {
     offset += MOVE_TARGET_CONTEXT;
+  }
+
+  // ── moveCount (47): armyInfo(27) + destination[16] + moveGroupMask[4] ──
+  if (context?.type === "moveCount") {
+    offset = encodeArmyInfo(buf, offset, game, context.army);
+    if (context.destinationIdx >= 0 && context.destinationIdx < NUM_NODES) {
+      buf[offset + context.destinationIdx] = 1;
+    }
+    offset += 16;
+    for (let i = 0; i < NUM_MOVE_GROUPS; i++) buf[offset++] = context.groupMask[i];
+  } else {
+    offset += MOVE_COUNT_CONTEXT;
   }
 
   // ── battleTarget (16): attackableNodeMask[16] ──
@@ -360,18 +398,13 @@ export function encodeState(
     offset += BATTLE_TARGET_CONTEXT;
   }
 
-  // ── battleSelect (51): armyInfo(22) + targetNode[16] + selectionState(12) + isDone(1) ──
+  // ── battleSelect (59): armyInfo(27) + targetNode[16] + selectionState(12) + isDone(1) + commitMask[3] ──
   if (context?.type === "battleSelect") {
     const army = context.army;
     if (army) {
-      offset = encodeArmyLocation(buf, offset, army);
-      offset = encodeArmyType(buf, offset, army);
-      const armyCost = game.unitStatsMap[army.unitType].cost;
-      buf[offset++] = army.units.length / (100 / armyCost);
-      buf[offset++] = encodeArmyHp(army);
-      buf[offset++] = army.remainingMoves / 2;
+      offset = encodeArmyInfo(buf, offset, game, army);
     } else {
-      offset += 22; // "done" option: army fields all zero
+      offset += ARMY_INFO_FEATURES; // "done" option: army fields all zero
     }
     if (context.targetNodeIdx >= 0 && context.targetNodeIdx < NUM_NODES) {
       buf[offset + context.targetNodeIdx] = 1;
@@ -388,25 +421,29 @@ export function encodeState(
       buf[offset++] = context.remainingPerType[t * 2 + 1];
     }
     buf[offset++] = context.isDone ? 1 : 0;
+    for (let i = 0; i < NUM_COMMIT_GROUPS; i++) buf[offset++] = context.commitMask[i];
   } else {
     offset += BATTLE_SELECT_CONTEXT;
   }
 
   // ── battleAllocate (46): myArmy(22) + enemyArmy(21) + battleState(2) + unitsNeeded(1) ──
+  // Units and health are those of the battle contingents, not the whole armies
   if (context?.type === "battleAllocate") {
     const army = context.army;
     offset = encodeArmyLocation(buf, offset, army);
     offset = encodeArmyType(buf, offset, army);
     const armyCost = game.unitStatsMap[army.unitType].cost;
-    buf[offset++] = army.units.length / (100 / armyCost);
+    const battleUnits = army.battleUnits;
+    buf[offset++] = battleUnits.length / (100 / armyCost);
     buf[offset++] = context.remaining / (100 / armyCost);
-    buf[offset++] = encodeArmyHp(army);
+    buf[offset++] = encodeUnitsHp(battleUnits);
     const enemy = context.enemyArmy;
     offset = encodeArmyLocation(buf, offset, enemy);
     offset = encodeArmyType(buf, offset, enemy);
     const enemyCost = game.unitStatsMap[enemy.unitType].cost;
-    buf[offset++] = enemy.units.length / (100 / enemyCost);
-    buf[offset++] = encodeArmyHp(enemy);
+    const enemyUnits = enemy.battleUnits;
+    buf[offset++] = enemyUnits.length / (100 / enemyCost);
+    buf[offset++] = encodeUnitsHp(enemyUnits);
     buf[offset++] = context.attackProgress;
     buf[offset++] = context.isAttacker ? 1 : 0;
     buf[offset++] = context.unitsNeeded / 500;

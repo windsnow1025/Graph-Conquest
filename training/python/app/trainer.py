@@ -4,24 +4,26 @@ import torch.nn.functional as F
 
 from app.config import (
     STATE_SIZE, NUM_ACTION_TYPES,
+    NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS,
     MOVE_TARGET_DIM, BATTLE_TARGET_DIM,
     OFF_STATE, OFF_VALUE, OFF_POLICY_WEIGHT,
     OFF_ACTION_TYPE, OFF_ACTION_MASK,
-    OFF_SPLIT_FRAC, OFF_SPLIT_MASK,
+    OFF_MOVE_FRAC, OFF_MOVE_FRAC_MASK,
     OFF_DISBAND_FRAC, OFF_DISBAND_MASK,
     OFF_RECRUIT_FRAC, OFF_RECRUIT_MASK,
     OFF_MOVE_TARGET, OFF_MOVE_MASK,
     OFF_BATTLE_TARGET, OFF_BATTLE_TARGET_MASK,
     OFF_BATTLE_SELECT, OFF_BATTLE_SELECT_MASK,
+    OFF_COMMIT_FRAC, OFF_COMMIT_MASK,
     OFF_KILL_FRAC, OFF_KILL_FRAC_MASK,
     OFF_RETREAT, OFF_RETREAT_MASK,
 )
 
 HEAD_NAMES = [
-    "val", "act", "spl", "dis", "rec",
-    "mov", "btgt", "bsel", "kfr", "ret",
+    "val", "act", "mfr", "dfr", "rec",
+    "mov", "btgt", "bsel", "cfr", "kfr", "ret",
 ]
-NUM_HEADS = 10
+NUM_HEADS = 11
 
 
 def _active_mean(values, mask):
@@ -29,20 +31,6 @@ def _active_mean(values, mask):
     if count == 0:
         return values.sum() * 0
     return (values * mask).sum() / count
-
-
-def _bce_masked(pred, target, mask):
-    """Binary cross-entropy, masked."""
-    eps = 1e-7
-    p = pred.squeeze(1).clamp(eps, 1 - eps)  # [B,1] -> [B]
-    bce = -(target * p.log() + (1 - target) * (1 - p).log())
-    return _active_mean(bce, mask)
-
-
-def _mse_masked(pred, target, mask):
-    """MSE, masked."""
-    mse = (pred.squeeze(1) - target) ** 2
-    return _active_mean(mse, mask)
 
 
 # Defense in depth: policy weights reaching this trainer must be NON-NEGATIVE.
@@ -89,6 +77,12 @@ def _mse_weighted(pred, target, mask, weight):
     return _weighted_active_mean(mse, mask, weight)
 
 
+def _mse_vector_weighted(pred, target, mask, weight):
+    """Per-element MSE of a per-group head [B,G], masked per element and weighted per sample."""
+    mse = (pred - target) ** 2
+    return _weighted_active_mean(mse, mask, weight.unsqueeze(1))
+
+
 def _ce_masked_weighted(logits, target, legal_mask, active, weight):
     """Categorical cross-entropy toward target class with illegal options masked out."""
     masked_logits = logits + (1 - legal_mask) * (-1e9)
@@ -98,7 +92,7 @@ def _ce_masked_weighted(logits, target, legal_mask, active, weight):
     return _weighted_active_mean(_clamp_push_away(ce, weight), active, weight)
 
 
-def _compute_losses(model, batch):
+def _compute_losses(model, batch, action_class_weight):
     state = batch[:, OFF_STATE:OFF_STATE + STATE_SIZE]
     value_target = batch[:, OFF_VALUE]
     value_mask = (value_target >= 0).float()  # value < 0 means no label (NaN encoded as -1)
@@ -108,10 +102,10 @@ def _compute_losses(model, batch):
     action_mask = batch[:, OFF_ACTION_MASK:OFF_ACTION_MASK + NUM_ACTION_TYPES]
     action_active = (action_type >= 0).float()
 
-    split_frac = batch[:, OFF_SPLIT_FRAC]
-    split_mask = batch[:, OFF_SPLIT_MASK]
-    disband_frac = batch[:, OFF_DISBAND_FRAC]
-    disband_mask = batch[:, OFF_DISBAND_MASK]
+    move_frac = batch[:, OFF_MOVE_FRAC:OFF_MOVE_FRAC + NUM_MOVE_GROUPS]
+    move_frac_mask = batch[:, OFF_MOVE_FRAC_MASK:OFF_MOVE_FRAC_MASK + NUM_MOVE_GROUPS]
+    disband_frac = batch[:, OFF_DISBAND_FRAC:OFF_DISBAND_FRAC + NUM_DISBAND_GROUPS]
+    disband_mask = batch[:, OFF_DISBAND_MASK:OFF_DISBAND_MASK + NUM_DISBAND_GROUPS]
     recruit_frac = batch[:, OFF_RECRUIT_FRAC]
     recruit_mask = batch[:, OFF_RECRUIT_MASK]
 
@@ -123,13 +117,15 @@ def _compute_losses(model, batch):
     bt_active = (battle_target >= 0).float()
     battle_select = batch[:, OFF_BATTLE_SELECT]
     bs_mask = batch[:, OFF_BATTLE_SELECT_MASK]
+    commit_frac = batch[:, OFF_COMMIT_FRAC:OFF_COMMIT_FRAC + NUM_COMMIT_GROUPS]
+    commit_mask = batch[:, OFF_COMMIT_MASK:OFF_COMMIT_MASK + NUM_COMMIT_GROUPS]
     kill_frac = batch[:, OFF_KILL_FRAC]
     kf_mask = batch[:, OFF_KILL_FRAC_MASK]
     retreat = batch[:, OFF_RETREAT]
     ret_mask = batch[:, OFF_RETREAT_MASK]
 
-    (pred_value, pred_action, pred_split, pred_disband, pred_recruit,
-     pred_move, pred_btarget, pred_bselect,
+    (pred_value, pred_action, pred_move_frac, pred_disband, pred_recruit,
+     pred_move, pred_btarget, pred_bselect, pred_commit,
      pred_kfrac, pred_retreat) = model(state)
 
     pred_value = pred_value.squeeze(1)
@@ -137,12 +133,15 @@ def _compute_losses(model, batch):
     # 1. Value head (MSE) — always learn, no policy weight
     v_loss = _active_mean((pred_value - value_target) ** 2, value_mask)
 
-    # 2. Action type (masked cross-entropy, weighted)
-    a_loss = _ce_masked_weighted(pred_action, action_type, action_mask, action_active, policy_weight)
+    # 2. Action type (masked cross-entropy, weighted; class-balanced when weights are given)
+    action_weight = policy_weight
+    if action_class_weight is not None:
+        action_weight = policy_weight * action_class_weight[action_type.clamp(min=0)]
+    a_loss = _ce_masked_weighted(pred_action, action_type, action_mask, action_active, action_weight)
 
-    # 3-4. Split/disband fraction (MSE, weighted)
-    sf_loss = _mse_weighted(pred_split, split_frac, split_mask, policy_weight)
-    df_loss = _mse_weighted(pred_disband, disband_frac, disband_mask, policy_weight)
+    # 3-4. Move/disband per-group fractions (MSE per group, weighted)
+    mf_loss = _mse_vector_weighted(pred_move_frac, move_frac, move_frac_mask, policy_weight)
+    df_loss = _mse_vector_weighted(pred_disband, disband_frac, disband_mask, policy_weight)
 
     # 5. Recruit fraction (MSE, weighted)
     rf_loss = _mse_weighted(pred_recruit, recruit_frac, recruit_mask, policy_weight)
@@ -151,16 +150,17 @@ def _compute_losses(model, batch):
     mv_loss = _ce_masked_weighted(pred_move, move_target, move_mask, move_active, policy_weight)
     bt_loss = _ce_masked_weighted(pred_btarget, battle_target, bt_mask, bt_active, policy_weight)
 
-    # 8-10. Binary/regression heads (BCE/MSE, weighted)
+    # 8-11. Battle select (BCE), commit fractions (MSE per group), kill fraction (MSE), retreat (BCE)
     bs_loss = _bce_weighted(pred_bselect, battle_select, bs_mask, policy_weight)
+    cf_loss = _mse_vector_weighted(pred_commit, commit_frac, commit_mask, policy_weight)
     kf_loss = _mse_weighted(pred_kfrac, kill_frac, kf_mask, policy_weight)
     rt_loss = _bce_weighted(pred_retreat, retreat, ret_mask, policy_weight)
 
-    return [v_loss, a_loss, sf_loss, df_loss, rf_loss,
-            mv_loss, bt_loss, bs_loss, kf_loss, rt_loss]
+    return [v_loss, a_loss, mf_loss, df_loss, rf_loss,
+            mv_loss, bt_loss, bs_loss, cf_loss, kf_loss, rt_loss]
 
 
-def eval_loss(model, data, batch_size, device):
+def eval_loss(model, data, batch_size, device, action_class_weight):
     model.eval()
     n = data.shape[0]
     totals = [0.0] * NUM_HEADS
@@ -168,7 +168,7 @@ def eval_loss(model, data, batch_size, device):
     with torch.no_grad():
         for i in range(0, n, batch_size):
             batch = torch.from_numpy(data[i:min(i + batch_size, n)]).to(device)
-            losses = _compute_losses(model, batch)
+            losses = _compute_losses(model, batch, action_class_weight)
             for j in range(NUM_HEADS):
                 totals[j] += losses[j].item()
             num_batches += 1
@@ -177,7 +177,7 @@ def eval_loss(model, data, batch_size, device):
     return sum(head_losses), head_losses
 
 
-def train_epoch(model, optimizer, data, batch_size, device):
+def train_epoch(model, optimizer, data, batch_size, device, action_class_weight):
     model.train()
     n = data.shape[0]
     perm = np.random.permutation(n)
@@ -187,7 +187,7 @@ def train_epoch(model, optimizer, data, batch_size, device):
     for i in range(0, n, batch_size):
         idx = perm[i:min(i + batch_size, n)]
         batch = torch.from_numpy(data[idx]).to(device)
-        losses = _compute_losses(model, batch)
+        losses = _compute_losses(model, batch, action_class_weight)
         loss = sum(losses)
         optimizer.zero_grad()
         loss.backward()

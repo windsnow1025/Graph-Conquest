@@ -18,7 +18,7 @@
  *
  * traj, little-endian, every block a multiple of 4 bytes so state vectors
  * can be viewed as Float32Array without copying:
- *   header (16 B): magic "STRATRAJ", stateDim u32, gameCount u32 (patched on
+ *   header (16 B): magic "STRATRJ2", stateDim u32, gameCount u32 (patched on
  *                  close)
  *   per game:
  *     meta (28 B): kind u8, nnIdx i8, opponentId u8, winnerIdx i8,
@@ -26,14 +26,18 @@
  *                  outcomes f32[3]
  *     snapshots (12 + 4·stateDim each): playerIdx u8, pad[3], v f32,
  *                  recordFrom u32, state f32[stateDim]
- *     records (12 + 4·stateDim each): playerIdx u8, explored u8,
- *                  decisionType u8, pad, a f32, b f32, state f32[stateDim]
+ *     records (4 + 4·ACTION_FLOATS + 4·stateDim each): playerIdx u8,
+ *                  explored u8, decisionType u8, pad, action f32[ACTION_FLOATS],
+ *                  state f32[stateDim]
  *     terminal states: 3 × f32[stateDim] (their value labels are the outcomes)
  */
 import type {RawRecord, TurnSnapshot, GameResult} from "./SelfPlay";
 import {assignAdvantages, recordsToSamples, snapshotsToValueSamples} from "./SelfPlay";
+import type {DecisionAction} from "../../src/AI/TurnExecutor";
 import {emptySample} from "./SampleTypes";
-import {STATE_SIZE} from "../../src/AI/nn/StateEncoder";
+import {STATE_SIZE, DECISION_TYPES} from "../../src/AI/nn/StateEncoder";
+import type {DecisionType} from "../../src/AI/nn/StateEncoder";
+import {NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS} from "../../src/AI/nn/UnitGroups";
 import {DATA_DIR, createSampleWriter} from "./trainUtils";
 import * as fs from "fs";
 import * as path from "path";
@@ -42,40 +46,40 @@ export const STORE_DIR = path.join(DATA_DIR, "store");
 
 export const GAME_KIND = {vsRandom: 0, vsOpponent: 1, selfPlay: 2} as const;
 
-const DECISION_TYPES: readonly string[] = [
-  "army", "moveTarget", "recruit", "battleTarget", "battleSelect", "battleAllocate", "battleRetreat",
-];
-
-const MAGIC = "STRATRAJ";
+const MAGIC = "STRATRJ2";
 const HEADER_SIZE = 16;
 const META_SIZE = 28;
-const ENTRY_SIZE = 12 + 4 * STATE_SIZE;
+const ACTION_FLOATS = 8; // room for the largest action: army = actionType + disbandFraction[6]
+const SNAPSHOT_SIZE = 12 + 4 * STATE_SIZE;
+const RECORD_SIZE = 4 + 4 * ACTION_FLOATS + 4 * STATE_SIZE;
 
-// Per decision type, the one or two numbers that recordsToSamples reads from
-// the action object (see SelfPlay.recordsToSamples).
-function encodeAction(decisionType: string, action: Record<string, number>): {a: number; b: number} {
-  switch (decisionType) {
-    case "army": return {a: action.actionType ?? 0, b: action.fraction ?? 0};
-    case "moveTarget": return {a: action.moveTarget ?? -1, b: 0};
-    case "recruit": return {a: action.recruitFraction ?? 0, b: 0};
-    case "battleTarget": return {a: action.battleTarget ?? -1, b: 0};
-    case "battleSelect": return {a: action.battleSelect ?? 0, b: 0};
-    case "battleAllocate": return {a: action.killFraction ?? 0, b: 0};
-    case "battleRetreat": return {a: action.battleRetreat ?? 0, b: 0};
-    default: throw new Error(`Unknown decisionType: ${decisionType}`);
+// Per decision type, the numbers recordsToSamples reads from the action
+// (see SelfPlay.recordsToSamples).
+function encodeAction(action: DecisionAction): Float32Array {
+  const a = new Float32Array(ACTION_FLOATS);
+  switch (action.type) {
+    case "recruit": a[0] = action.recruitFraction; break;
+    case "army": a[0] = action.actionType; a.set(action.disbandFraction, 1); break;
+    case "moveTarget": a[0] = action.moveTarget; break;
+    case "moveCount": a.set(action.moveFraction, 0); break;
+    case "battleTarget": a[0] = action.battleTarget; break;
+    case "battleSelect": a[0] = action.chosen; a.set(action.commitFraction, 1); break;
+    case "battleAllocate": a[0] = action.killFraction; break;
+    case "battleRetreat": a[0] = action.battleRetreat; break;
   }
+  return a;
 }
 
-function decodeAction(decisionType: string, a: number, b: number): Record<string, number> {
-  switch (decisionType) {
-    case "army": return {actionType: a, fraction: b};
-    case "moveTarget": return {moveTarget: a};
-    case "recruit": return {recruitFraction: a};
-    case "battleTarget": return {battleTarget: a};
-    case "battleSelect": return {battleSelect: a};
-    case "battleAllocate": return {killFraction: a};
-    case "battleRetreat": return {battleRetreat: a};
-    default: throw new Error(`Unknown decisionType: ${decisionType}`);
+function decodeAction(type: DecisionType, a: Float32Array): DecisionAction {
+  switch (type) {
+    case "recruit": return {type, recruitFraction: a[0]};
+    case "army": return {type, actionType: a[0], disbandFraction: a.slice(1, 1 + NUM_DISBAND_GROUPS)};
+    case "moveTarget": return {type, moveTarget: a[0]};
+    case "moveCount": return {type, moveFraction: a.slice(0, NUM_MOVE_GROUPS)};
+    case "battleTarget": return {type, battleTarget: a[0]};
+    case "battleSelect": return {type, chosen: a[0], commitFraction: a.slice(1, 1 + NUM_COMMIT_GROUPS)};
+    case "battleAllocate": return {type, killFraction: a[0]};
+    case "battleRetreat": return {type, battleRetreat: a[0]};
   }
 }
 
@@ -89,7 +93,7 @@ export interface DatasetManifest {
   /** git HEAD at generation time; provenance only, not used for validation */
   simRev: string;
   params: Record<string, number>;
-  /** model whose decisions were recorded; null when the generator is code (imitation) */
+  /** model that played the recorded games (the DAgger model for imitation); null when only code played */
   model: {name: string; weightsMd5: string} | null;
   /** opponentId in each game frame indexes this list */
   opponents: {name: string; weightsMd5?: string}[];
@@ -146,7 +150,7 @@ export function createTrajectoryWriter(filePath: string) {
   return {
     writeGame(meta: PersistedGameMeta, result: GameResult, terminalStates: Float32Array[]): void {
       const {records: recs, snapshots: snaps, outcomes} = result;
-      const buf = Buffer.alloc(META_SIZE + (snaps.length + recs.length) * ENTRY_SIZE + terminalStates.length * 4 * STATE_SIZE);
+      const buf = Buffer.alloc(META_SIZE + snaps.length * SNAPSHOT_SIZE + recs.length * RECORD_SIZE + terminalStates.length * 4 * STATE_SIZE);
       buf.writeUInt8(meta.kind, 0);
       buf.writeInt8(meta.nnIdx, 1);
       buf.writeUInt8(meta.opponentId, 2);
@@ -161,19 +165,16 @@ export function createTrajectoryWriter(filePath: string) {
         buf.writeFloatLE(s.v, off + 4);
         buf.writeUInt32LE(s.recordFrom, off + 8);
         writeState(buf, off + 12, s.state);
-        off += ENTRY_SIZE;
+        off += SNAPSHOT_SIZE;
       }
       for (const r of recs) {
-        const dt = DECISION_TYPES.indexOf(r.decisionType);
-        if (dt < 0) throw new Error(`Unknown decisionType: ${r.decisionType}`);
-        const {a, b} = encodeAction(r.decisionType, r.action);
+        const action = encodeAction(r.action);
         buf.writeUInt8(r.playerIdx, off);
         buf.writeUInt8(r.explored ? 1 : 0, off + 1);
-        buf.writeUInt8(dt, off + 2);
-        buf.writeFloatLE(a, off + 4);
-        buf.writeFloatLE(b, off + 8);
-        writeState(buf, off + 12, r.state);
-        off += ENTRY_SIZE;
+        buf.writeUInt8(DECISION_TYPES.indexOf(r.action.type), off + 2);
+        for (let i = 0; i < ACTION_FLOATS; i++) buf.writeFloatLE(action[i], off + 4 + 4 * i);
+        writeState(buf, off + 4 + 4 * ACTION_FLOATS, r.state);
+        off += RECORD_SIZE;
       }
       for (const t of terminalStates) {
         writeState(buf, off, t);
@@ -223,7 +224,7 @@ export function readTrajectories(filePath: string, onGame: (game: PersistedGame,
       if (fs.readSync(fd, meta, 0, META_SIZE, null) !== META_SIZE) throw new Error(`${filePath}: truncated at game ${g}`);
       const snapCount = meta.readUInt32LE(8);
       const recCount = meta.readUInt32LE(12);
-      const bodySize = (snapCount + recCount) * ENTRY_SIZE + 3 * 4 * STATE_SIZE;
+      const bodySize = snapCount * SNAPSHOT_SIZE + recCount * RECORD_SIZE + 3 * 4 * STATE_SIZE;
       // allocUnsafeSlow: own ArrayBuffer at byteOffset 0, so 4-aligned offsets
       // can be viewed as Float32Array directly
       const body = Buffer.allocUnsafeSlow(bodySize);
@@ -243,7 +244,7 @@ export function readTrajectories(filePath: string, onGame: (game: PersistedGame,
           recordFrom: body.readUInt32LE(off + 8),
           state: new Float32Array(body.buffer, off + 12, STATE_SIZE),
         };
-        off += ENTRY_SIZE;
+        off += SNAPSHOT_SIZE;
       }
       const recordsArr: RawRecord[] = new Array(recCount);
       for (let i = 0; i < recCount; i++) {
@@ -252,12 +253,11 @@ export function readTrajectories(filePath: string, onGame: (game: PersistedGame,
         recordsArr[i] = {
           playerIdx: body.readUInt8(off),
           explored: body.readUInt8(off + 1) === 1,
-          decisionType,
-          action: decodeAction(decisionType, body.readFloatLE(off + 4), body.readFloatLE(off + 8)),
+          action: decodeAction(decisionType, new Float32Array(body.buffer, off + 4, ACTION_FLOATS)),
           advantage: 0,
-          state: new Float32Array(body.buffer, off + 12, STATE_SIZE),
+          state: new Float32Array(body.buffer, off + 4 + 4 * ACTION_FLOATS, STATE_SIZE),
         };
-        off += ENTRY_SIZE;
+        off += RECORD_SIZE;
       }
       const terminalStates: Float32Array[] = [];
       for (let p = 0; p < 3; p++) {

@@ -12,14 +12,16 @@
  * ε-explored decisions keep only their value label (no policy target).
  */
 import type {NNModel} from "../../src/AI/nn/NNModel";
-import {
-  CTX_BASE, CTX_ARMY_OFF, CTX_MOV_OFF, CTX_BTGT_OFF,
-  BATTLE_TARGET_DIM, BATTLE_TARGET_STOP,
-} from "../../src/AI/nn/NNModel";
+import {BATTLE_TARGET_DIM, BATTLE_TARGET_STOP} from "../../src/AI/nn/NNModel";
 import {executeNNTurn} from "../../src/AI/TurnExecutor";
-import type {DecisionInfo, TurnOptions} from "../../src/AI/TurnExecutor";
-import {ACTION_SPLIT, ACTION_DISBAND, NUM_ACTION_TYPES} from "../../src/AI/nn/ActionSpace";
-import {NUM_NODES, encodeState} from "../../src/AI/nn/StateEncoder";
+import type {DecisionAction, DecisionInfo, TurnOptions} from "../../src/AI/TurnExecutor";
+import {ACTION_DISBAND, NUM_ACTION_TYPES} from "../../src/AI/nn/ActionSpace";
+import {NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS} from "../../src/AI/nn/UnitGroups";
+import {NUM_NODES} from "../../src/AI/nn/GameIndex";
+import {
+  encodeState, CTX_BASE, CTX_ARMY_OFF, CTX_MOV_OFF, CTX_MCNT_OFF, CTX_BTGT_OFF, CTX_BSEL_OFF,
+  ARMY_ACTION_MASK_OFF, ARMY_DISBAND_MASK_OFF, MOV_LEGAL_MASK_OFF, MCNT_GROUP_MASK_OFF, BSEL_COMMIT_MASK_OFF,
+} from "../../src/AI/nn/StateEncoder";
 import type {Sample} from "./SampleTypes";
 import {emptySample, terminalValue} from "./SampleTypes";
 import {randomTurn} from "./Opponents";
@@ -28,8 +30,7 @@ import type GameSystem from "../../src/lib/GameSystem";
 export interface RawRecord {
   playerIdx: number;
   state: Float32Array;
-  decisionType: string;
-  action: Record<string, number>;
+  action: DecisionAction;
   explored: boolean;
   advantage: number;
 }
@@ -48,9 +49,16 @@ export interface GameResult {
 }
 
 // Mask locations within the encoded state (features are centered, so test > 0)
-const ACTION_MASK_OFFSET = CTX_BASE + CTX_ARMY_OFF + 23; // army context: features(23) + mask(5)
-const MOVE_MASK_OFFSET = CTX_BASE + CTX_MOV_OFF + 23;    // moveTarget context: army info(23) + legal mask(16)
-const BTGT_MASK_OFFSET = CTX_BASE + CTX_BTGT_OFF;        // battleTarget context: attackable mask(16)
+const ACTION_MASK_OFFSET = CTX_BASE + CTX_ARMY_OFF + ARMY_ACTION_MASK_OFF;
+const DISBAND_MASK_OFFSET = CTX_BASE + CTX_ARMY_OFF + ARMY_DISBAND_MASK_OFF;
+const MOVE_MASK_OFFSET = CTX_BASE + CTX_MOV_OFF + MOV_LEGAL_MASK_OFF;
+const MOVE_GROUP_MASK_OFFSET = CTX_BASE + CTX_MCNT_OFF + MCNT_GROUP_MASK_OFF;
+const BTGT_MASK_OFFSET = CTX_BASE + CTX_BTGT_OFF;
+const COMMIT_MASK_OFFSET = CTX_BASE + CTX_BSEL_OFF + BSEL_COMMIT_MASK_OFF;
+
+function readMask(state: Float32Array, offset: number, length: number): Float32Array {
+  return Float32Array.from({length}, (_, i) => (state[offset + i] > 0 ? 1 : 0));
+}
 
 function makeRecordingOpts(records: RawRecord[], temperature: number, epsilon: number): TurnOptions {
   return {
@@ -60,8 +68,7 @@ function makeRecordingOpts(records: RawRecord[], temperature: number, epsilon: n
       records.push({
         playerIdx: info.playerIdx,
         state: new Float32Array(info.state),
-        decisionType: info.decisionType,
-        action: {...info.action},
+        action: info.action,
         explored: info.explored,
         advantage: 0,
       });
@@ -224,39 +231,54 @@ export function recordsToSamples(records: RawRecord[], outcomes: number[]): Samp
     // ε-random actions are noise, not policy: train only the value head on them
     if (rec.explored) return s;
 
-    const dt = rec.decisionType;
+    // Legality masks are read back from the recorded state
     const action = rec.action;
-
-    if (dt === "army") {
-      const actionType = action.actionType ?? 0;
-      // Extract mask from state (features are centered, so legal = value > 0)
-      s.actionTypeTarget = actionType;
-      s.actionTypeMask = Float32Array.from({length: NUM_ACTION_TYPES},
-        (_, i) => rec.state[ACTION_MASK_OFFSET + i] > 0 ? 1 : 0);
-      if (actionType === ACTION_SPLIT) { s.splitFraction = action.fraction ?? 0; s.splitMask = 1; }
-      if (actionType === ACTION_DISBAND) { s.disbandFraction = action.fraction ?? 0; s.disbandMask = 1; }
-    } else if (dt === "moveTarget") {
-      s.moveTargetIdx = action.moveTarget ?? -1;
-      s.moveMask = Float32Array.from({length: NUM_NODES},
-        (_, i) => rec.state[MOVE_MASK_OFFSET + i] > 0 ? 1 : 0);
-    } else if (dt === "recruit") {
-      s.recruitFraction = action.recruitFraction ?? 0;
-      s.recruitMask = 1;
-    } else if (dt === "battleTarget") {
-      s.battleTargetIdx = action.battleTarget ?? -1;
-      const mask = Float32Array.from({length: BATTLE_TARGET_DIM},
-        (_, i) => i < NUM_NODES && rec.state[BTGT_MASK_OFFSET + i] > 0 ? 1 : 0);
-      mask[BATTLE_TARGET_STOP] = 1;
-      s.battleTargetMask = mask;
-    } else if (dt === "battleSelect") {
-      s.battleSelect = action.battleSelect ?? 0;
-      s.battleSelectMask = 1;
-    } else if (dt === "battleAllocate") {
-      s.killFraction = action.killFraction ?? 0;
-      s.killFracMask = 1;
-    } else if (dt === "battleRetreat") {
-      s.battleRetreat = action.battleRetreat ?? 0;
-      s.retreatMask = 1;
+    switch (action.type) {
+      case "army":
+        s.actionTypeTarget = action.actionType;
+        s.actionTypeMask = readMask(rec.state, ACTION_MASK_OFFSET, NUM_ACTION_TYPES);
+        if (action.actionType === ACTION_DISBAND) {
+          s.disbandFraction = new Float32Array(action.disbandFraction);
+          s.disbandMask = readMask(rec.state, DISBAND_MASK_OFFSET, NUM_DISBAND_GROUPS);
+        }
+        break;
+      case "moveTarget":
+        s.moveTargetIdx = action.moveTarget;
+        s.moveMask = readMask(rec.state, MOVE_MASK_OFFSET, NUM_NODES);
+        break;
+      case "moveCount":
+        s.moveFraction = new Float32Array(action.moveFraction);
+        s.moveFractionMask = readMask(rec.state, MOVE_GROUP_MASK_OFFSET, NUM_MOVE_GROUPS);
+        break;
+      case "recruit":
+        s.recruitFraction = action.recruitFraction;
+        s.recruitMask = 1;
+        break;
+      case "battleTarget": {
+        s.battleTargetIdx = action.battleTarget;
+        const mask = new Float32Array(BATTLE_TARGET_DIM);
+        mask.set(readMask(rec.state, BTGT_MASK_OFFSET, NUM_NODES));
+        mask[BATTLE_TARGET_STOP] = 1;
+        s.battleTargetMask = mask;
+        break;
+      }
+      case "battleSelect":
+        s.battleSelect = action.chosen;
+        s.battleSelectMask = 1;
+        // The chosen army's commitment was acted on; the "done" option has an all-zero mask
+        if (action.chosen === 1) {
+          s.commitFraction = new Float32Array(action.commitFraction);
+          s.commitMask = readMask(rec.state, COMMIT_MASK_OFFSET, NUM_COMMIT_GROUPS);
+        }
+        break;
+      case "battleAllocate":
+        s.killFraction = action.killFraction;
+        s.killFracMask = 1;
+        break;
+      case "battleRetreat":
+        s.battleRetreat = action.battleRetreat;
+        s.retreatMask = 1;
+        break;
     }
 
     return s;

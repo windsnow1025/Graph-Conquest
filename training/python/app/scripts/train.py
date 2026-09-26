@@ -1,4 +1,4 @@
-"""Train the model on binary sample data exported by TypeScript (v7, 10 heads).
+"""Train the model on binary sample data exported by TypeScript (v10, 11 heads).
 
 Usage:
   uv run python -m app.scripts.train --data path/to/samples.bin --model path/to/model/
@@ -7,8 +7,10 @@ Usage:
 import argparse
 import time
 
+import numpy as np
 import torch
 
+from app.config import NUM_ACTION_TYPES, OFF_ACTION_TYPE
 from app.model import GraphConquestNN
 from app.data_io import read_samples, read_multiple
 from app.trainer import train_epoch, eval_loss, HEAD_NAMES
@@ -16,11 +18,11 @@ from app.export_tfjs import export_model, import_tfjs_weights
 
 
 def _fmt(total, heads):
-    # Line 1: loss + non-battle heads (val act spl dis rec mov)
-    line1_names = HEAD_NAMES[:6]  # val act spl dis rec mov
+    # Line 1: loss + non-battle heads (val act mfr dfr rec mov)
+    line1_names = HEAD_NAMES[:6]  # val act mfr dfr rec mov
     line1 = " ".join(f"{name}={v:.6f}" for name, v in zip(line1_names, heads[:6]))
-    # Line 2: battle heads (btgt bsel batk kfr ret)
-    line2_names = HEAD_NAMES[6:]  # btgt bsel batk kfr ret
+    # Line 2: battle heads (btgt bsel cfr kfr ret)
+    line2_names = HEAD_NAMES[6:]  # btgt bsel cfr kfr ret
     line2 = " ".join(f"{name}={v:.6f}" for name, v in zip(line2_names, heads[6:]))
     return f"loss={total:.4f} {line1}\nbattle: {line2}"
 
@@ -33,6 +35,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--fresh", action="store_true", help="Train from scratch (ignore existing weights)")
+    parser.add_argument("--balance-actions", type=float, default=0.0,
+                        help="Weight the action-type loss by inverse class frequency to this power (0 = off; imitation: the rare MOVE label)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -52,13 +56,24 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    _, init_heads = eval_loss(model, data, args.batch_size, device)
+    action_class_weight = None
+    if args.balance_actions > 0:
+        labels = data[:, OFF_ACTION_TYPE]
+        counts = np.array([(labels == c).sum() for c in range(NUM_ACTION_TYPES)], dtype=np.float64)
+        total = counts.sum()
+        # Inverse frequency to a power: 1 is fully balanced, lower powers lift the rare
+        # MOVE label without letting the rarer DISBAND label dominate the head
+        weights = np.where(counts > 0, (total / (NUM_ACTION_TYPES * np.maximum(counts, 1))) ** args.balance_actions, 1.0)
+        action_class_weight = torch.tensor(weights, dtype=torch.float32, device=device)
+        print("action class weights: " + " ".join(f"{w:.2f}" for w in weights), flush=True)
+
+    _, init_heads = eval_loss(model, data, args.batch_size, device, action_class_weight)
     w = len(str(args.epochs))
     print(f"epoch {0:>{w}}/{args.epochs}: {_fmt(sum(init_heads), init_heads)}", flush=True)
 
     for epoch in range(args.epochs):
-        train_loss, train_heads = train_epoch(model, optimizer, data, args.batch_size, device)
-        avg_loss, heads = eval_loss(model, data, args.batch_size, device)
+        train_loss, train_heads = train_epoch(model, optimizer, data, args.batch_size, device, action_class_weight)
+        avg_loss, heads = eval_loss(model, data, args.batch_size, device, action_class_weight)
         print(f"epoch {epoch + 1:>{w}}/{args.epochs}: {_fmt(avg_loss, heads)}", flush=True)
 
     ratios = " ".join(

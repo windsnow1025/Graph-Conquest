@@ -1,4 +1,4 @@
-"""Export PyTorch model weights to TF.js layers-model format (v9, context-free trunk)."""
+"""Export PyTorch model weights to TF.js layers-model format (v10, context-free trunk)."""
 import json
 import os
 import numpy as np
@@ -6,9 +6,10 @@ import torch
 
 from app.config import (
     CONTEXT_OFFSET, NUM_ACTION_TYPES,
+    NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS,
     MOVE_TARGET_DIM, BATTLE_TARGET_DIM,
     HIDDEN1, HIDDEN2, HEAD_HIDDEN,
-    CTX_DT_LEN, CTX_REC_LEN, CTX_ARMY_LEN, CTX_MOV_LEN,
+    CTX_DT_LEN, CTX_REC_LEN, CTX_ARMY_LEN, CTX_MOV_LEN, CTX_MCNT_LEN,
     CTX_BTGT_LEN, CTX_BSEL_LEN, CTX_BALLOC_LEN, CTX_BRET_LEN,
 )
 
@@ -55,6 +56,7 @@ def build_model_json():
         _input_config("ctx_rec", CTX_REC_LEN),
         _input_config("ctx_army", CTX_ARMY_LEN),
         _input_config("ctx_mov", CTX_MOV_LEN),
+        _input_config("ctx_mcnt", CTX_MCNT_LEN),
         _input_config("ctx_btgt", CTX_BTGT_LEN),
         _input_config("ctx_bsel", CTX_BSEL_LEN),
         _input_config("ctx_balloc", CTX_BALLOC_LEN),
@@ -67,16 +69,17 @@ def build_model_json():
 
     # Per-head: (head_name, head_units, head_activation, ctx_input_names)
     head_configs = [
-        ("value",            1,                "sigmoid", []),
-        ("action_type",      NUM_ACTION_TYPES, "linear",  ["ctx_dt", "ctx_army"]),
-        ("split_fraction",   1,                "sigmoid", ["ctx_dt", "ctx_army"]),
-        ("disband_fraction", 1,                "sigmoid", ["ctx_dt", "ctx_army"]),
-        ("recruit_fraction", 1,                 "sigmoid", ["ctx_dt", "ctx_rec"]),
-        ("move_target",      MOVE_TARGET_DIM,   "linear",  ["ctx_dt", "ctx_mov"]),
-        ("battle_target",    BATTLE_TARGET_DIM, "linear",  ["ctx_dt", "ctx_btgt"]),
-        ("battle_select",    1,                 "sigmoid", ["ctx_dt", "ctx_bsel"]),
-        ("kill_fraction",    1,                "sigmoid", ["ctx_dt", "ctx_balloc"]),
-        ("battle_retreat",   1,                "sigmoid", ["ctx_dt", "ctx_bret"]),
+        ("value",            1,                  "sigmoid", []),
+        ("action_type",      NUM_ACTION_TYPES,   "linear",  ["ctx_dt", "ctx_army"]),
+        ("move_fraction",    NUM_MOVE_GROUPS,    "sigmoid", ["ctx_dt", "ctx_mcnt"]),
+        ("disband_fraction", NUM_DISBAND_GROUPS, "sigmoid", ["ctx_dt", "ctx_army"]),
+        ("recruit_fraction", 1,                  "sigmoid", ["ctx_dt", "ctx_rec"]),
+        ("move_target",      MOVE_TARGET_DIM,    "linear",  ["ctx_dt", "ctx_mov"]),
+        ("battle_target",    BATTLE_TARGET_DIM,  "linear",  ["ctx_dt", "ctx_btgt"]),
+        ("battle_select",    1,                  "sigmoid", ["ctx_dt", "ctx_bsel"]),
+        ("commit_fraction",  NUM_COMMIT_GROUPS,  "sigmoid", ["ctx_dt", "ctx_bsel"]),
+        ("kill_fraction",    1,                  "sigmoid", ["ctx_dt", "ctx_balloc"]),
+        ("battle_retreat",   1,                  "sigmoid", ["ctx_dt", "ctx_bret"]),
     ]
 
     for name, units, act, ctx_names in head_configs:
@@ -88,14 +91,14 @@ def build_model_json():
             layers.append(_dense_config(f"{name}_hidden", HEAD_HIDDEN, "relu", "dense2"))
         layers.append(_dense_config(f"{name}_head", units, act, f"{name}_hidden"))
 
-    input_names = ["state_input", "ctx_dt", "ctx_rec", "ctx_army", "ctx_mov",
+    input_names = ["state_input", "ctx_dt", "ctx_rec", "ctx_army", "ctx_mov", "ctx_mcnt",
                    "ctx_btgt", "ctx_bsel", "ctx_balloc", "ctx_bret"]
     output_names = [f"{cfg[0]}_head" for cfg in head_configs]
 
     return {
         "class_name": "Model",
         "config": {
-            "name": "graph_conquest_nn_v9",
+            "name": "graph_conquest_nn_v10",
             "layers": layers,
             "input_layers": [[n, 0, 0] for n in input_names],
             "output_layers": [[n, 0, 0] for n in output_names],
@@ -109,12 +112,13 @@ WEIGHT_ORDER = [
     "dense1", "dense2",
     "value_hidden", "value_head",
     "action_type_hidden", "action_type_head",
-    "split_fraction_hidden", "split_fraction_head",
+    "move_fraction_hidden", "move_fraction_head",
     "disband_fraction_hidden", "disband_fraction_head",
     "recruit_fraction_hidden", "recruit_fraction_head",
     "move_target_hidden", "move_target_head",
     "battle_target_hidden", "battle_target_head",
     "battle_select_hidden", "battle_select_head",
+    "commit_fraction_hidden", "commit_fraction_head",
     "kill_fraction_hidden", "kill_fraction_head",
     "battle_retreat_hidden", "battle_retreat_head",
 ]

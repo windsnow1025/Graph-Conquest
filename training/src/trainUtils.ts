@@ -8,7 +8,7 @@ import Graph from "../../src/lib/Graph";
 import Player from "../../src/lib/Player";
 import Config from "../../src/lib/data/Config";
 import type {GameConfig} from "../../src/lib/Config";
-import {UNIT_TYPES} from "../../src/AI/nn/StateEncoder";
+import {UNIT_TYPES} from "../../src/AI/nn/GameIndex";
 import {executeNNTurn} from "../../src/AI/TurnExecutor";
 import {randomTurn} from "./Opponents";
 import {scorePlayer} from "./GreedyAI";
@@ -157,7 +157,7 @@ export function createSampleWriter(outPath: string) {
 // ─── Python training ───
 
 export async function trainWithPython(
-  dataFile: string, modelDir: string, epochs: number, numSamples: number, fresh: boolean,
+  dataFile: string, modelDir: string, epochs: number, numSamples: number, fresh: boolean, actionBalance: number,
 ): Promise<boolean> {
   const pythonDir = path.resolve("training/python");
   const trainArgs = [
@@ -165,8 +165,9 @@ export async function trainWithPython(
     "--data", dataFile, "--model", modelDir,
     "--epochs", String(epochs), "--batch-size", String(BATCH_SIZE), "--lr", String(LEARNING_RATE),
     ...(fresh ? ["--fresh"] : []),
+    ...(actionBalance > 0 ? ["--balance-actions", String(actionBalance)] : []),
   ];
-  log(`\nTraining (${numSamples} samples, ${epochs} epochs${fresh ? ", fresh" : ""}):`);
+  log(`\nTraining (${numSamples} samples, ${epochs} epochs${fresh ? ", fresh" : ""}${actionBalance > 0 ? `, action balance ${actionBalance}` : ""}):`);
   return new Promise<boolean>((resolve) => {
     const proc = spawn("uv", trainArgs, {cwd: pythonDir, stdio: ["ignore", "pipe", "pipe"]});
     let lastLoss = 0;
@@ -177,7 +178,7 @@ export async function trainWithPython(
       buf = lines.pop()!;
       for (const line of lines) {
         const trimmed = line.trim();
-        if (trimmed.startsWith("epoch ") || trimmed.startsWith("ratio:") || trimmed.startsWith("Exported")) {
+        if (trimmed.startsWith("epoch ") || trimmed.startsWith("ratio:") || trimmed.startsWith("Exported") || trimmed.startsWith("action class weights")) {
           logRaw(`  ${trimmed}`);
         } else if (trimmed.startsWith("battle:")) {
           logRaw(`                 ${trimmed}`);
