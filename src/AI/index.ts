@@ -1,40 +1,21 @@
 import type GameSystem from "../lib/GameSystem";
 import type Battle from "../lib/Battle";
-import {executeNNTurn, executeNNTurnSteps, executeNNDefenderPhase} from "./TurnExecutor";
+import {executeNNTurnSteps, executeNNDefenderPhase} from "./TurnExecutor";
 import {NNModel} from "./nn/NNModel";
 import {greedyTurnSteps, greedyDefenderPhase} from "../../training/src/GreedyAI";
 
-let nnModel: NNModel | null = null;
-let modelLoadAttempted = false;
+let modelLoading: Promise<NNModel> | null = null;
 
-async function ensureModelLoaded(): Promise<void> {
-  if (modelLoadAttempted) return;
-  modelLoadAttempted = true;
-
-  try {
+/** The published web model, loaded once; a failed load propagates to the caller and is retried on the next call. */
+function loadModel(): Promise<NNModel> {
+  if (!modelLoading) {
     const model = new NNModel();
-    await model.load("/model/model.json");
-    nnModel = model;
-    console.log("NN model loaded successfully");
-  } catch (e) {
-    console.warn("NN model not found, AI will skip turns:", e);
-    nnModel = null;
+    modelLoading = model.load("/model/model.json").then(() => model, (e: unknown) => {
+      modelLoading = null;
+      throw e;
+    });
   }
-}
-
-export async function aiTakeTurn(game: GameSystem): Promise<void> {
-  if (game.gameOver || game.currentPlayer.defeated) {
-    game.endTurn();
-    return;
-  }
-
-  await ensureModelLoaded();
-
-  if (nnModel?.isLoaded()) {
-    executeNNTurn(game, nnModel);
-  } else {
-    game.endTurn();
-  }
+  return modelLoading;
 }
 
 export async function aiTurnSteps(game: GameSystem): Promise<Generator<void> | null> {
@@ -42,15 +23,7 @@ export async function aiTurnSteps(game: GameSystem): Promise<Generator<void> | n
     game.endTurn();
     return null;
   }
-
-  await ensureModelLoaded();
-
-  if (nnModel?.isLoaded()) {
-    return executeNNTurnSteps(game, nnModel);
-  } else {
-    game.endTurn();
-    return null;
-  }
+  return executeNNTurnSteps(game, await loadModel());
 }
 
 export function greedyTurnStepsUI(game: GameSystem): Generator<void> | null {
@@ -65,14 +38,6 @@ export async function aiDefenderPhase(game: GameSystem, battle: Battle, mode: st
   if (mode === "greedy") {
     greedyDefenderPhase(game, battle);
   } else {
-    await ensureModelLoaded();
-    if (nnModel?.isLoaded()) {
-      executeNNDefenderPhase(game, nnModel, battle);
-    } else {
-      // No model: the defender passes
-      for (const army of battle.unactedArmies) {
-        if (battle.canAct(army)) battle.allocateAttack(army, new Map());
-      }
-    }
+    executeNNDefenderPhase(game, await loadModel(), battle);
   }
 }

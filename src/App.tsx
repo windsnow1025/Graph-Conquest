@@ -38,6 +38,7 @@ function App() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [gameMode, setGameMode] = useState<GameMode>("menu");
   const [gameEpoch, setGameEpoch] = useState(0); // bumped when gameRef is replaced, so game-bound effects restart
+  const [aiError, setAiError] = useState<string | null>(null); // an AI turn or defender phase that failed (the game cannot continue)
   const canvasContainerRef = useRef<HTMLDivElement>(null);
 
   // Recruit UI
@@ -128,7 +129,7 @@ function App() {
       }
       if (!cancelled) { clearSelection(); selectDefaultNode(); update(); }
     };
-    runAllAITurns();
+    runAllAITurns().catch((e: unknown) => { if (!cancelled) setAiError(e instanceof Error ? e.message : String(e)); });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAITurn, gameMode, gameEpoch]);
@@ -147,7 +148,7 @@ function App() {
 
     // AI-controlled defender uses their model (NN or greedy)
     if (battle.phase === BattlePhase.DefenderTurn && aiPlayers.has(battle.defenderPlayer.name)) {
-      aiDefenderPhase(gameRef.current, battle, gameMode).then(update);
+      aiDefenderPhase(gameRef.current, battle, gameMode).then(update, (e: unknown) => setAiError(e instanceof Error ? e.message : String(e)));
       return;
     }
 
@@ -177,6 +178,7 @@ function App() {
     setVersion(0);
     clearSelection();
     clearBattleAttack();
+    setAiError(null);
     setGameMode(mode);
     selectDefaultNode();
   }, [clearSelection, clearBattleAttack, selectDefaultNode]);
@@ -205,6 +207,7 @@ function App() {
     setGameEpoch(e => e + 1);
     clearSelection();
     clearBattleAttack();
+    setAiError(null);
     setSaveLoadMode(null);
     update();
   };
@@ -548,6 +551,15 @@ function App() {
                 {battle.result === BattleResult.Draw && "Draw (Attacks Exhausted)"}
               </Typography>
             )}
+          </Paper>
+        )}
+
+        {/* ===== TOP CENTER: AI failure ===== */}
+        {aiError && (
+          <Paper elevation={3} sx={{position: "absolute", top: 48, left: "50%", transform: "translateX(-50%)", p: 1, ...overlayPaper, maxWidth: 520}}>
+            <Typography variant="body2" sx={{fontWeight: "bold", color: "#f44336"}}>
+              AI failed: {aiError}
+            </Typography>
           </Paper>
         )}
 
