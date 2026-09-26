@@ -509,7 +509,7 @@ function App() {
               <Box key={player.name} sx={{mb: 1, opacity: player.defeated ? 0.4 : 1, borderLeft: isCurrent ? `3px solid ${color}` : "3px solid transparent", pl: 0.5}}>
                 <Box sx={{display: "flex", alignItems: "center", gap: 0.5, mb: 0.25}}>
                   <Chip label={player.name} size="small" sx={{bgcolor: color, color: "#fff", height: 18, fontSize: "0.65rem"}}/>
-                  {player.defeated && <Typography variant="caption" sx={{color: "#f44336"}}>Defeated</Typography>}
+                  {player.defeated && <Typography component="span" sx={{color: "#f44336", fontSize: "0.65rem", lineHeight: "18px"}}>Defeated</Typography>}
                 </Box>
                 <Box component="table" sx={{width: "100%", "& td": {fontSize: "0.65rem", py: 0}, "& td:last-child": {textAlign: "right"}}}>
                   <tbody>
