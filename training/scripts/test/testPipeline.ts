@@ -117,7 +117,7 @@ async function main() {
         vs.value = result.outcomes[p];
         samples.push(vs);
       }
-      reference.push(...samples.filter(s => s.policyWeight > 0));
+      reference.push(...samples);
     }
     const written = writer.stats;
     writer.close();
@@ -131,7 +131,7 @@ async function main() {
 
     const matFile = path.join(DATA_DIR, "pipeline-mat.bin");
     const stats = materializeSamples(storeDir, matFile, 0.8);
-    assert(stats.kept === reference.length, `materialized ${stats.kept} != in-memory ${reference.length}`);
+    assert(stats.samples === reference.length, `materialized ${stats.samples} != in-memory ${reference.length}`);
 
     const buf = fs.readFileSync(matFile);
     assert(buf.readUInt32LE(0) === reference.length, "materialized file count mismatch");
@@ -142,7 +142,7 @@ async function main() {
         assert(got === ref[j], `materialized sample ${i} float ${j}: ${got} != ${ref[j]}`);
       }
     }
-    log(`  Roundtrip exact: ${stats.kept} samples (pos ${stats.posAdv} / neg ${stats.negAdv})`);
+    log(`  Roundtrip exact: ${stats.samples} samples (pos ${stats.posAdv} / neg ${stats.negAdv})`);
     fs.rmSync(storeDir, {recursive: true, force: true});
     fs.rmSync(matFile, {force: true});
   }
@@ -183,7 +183,7 @@ async function main() {
   exportSamples(allSamples, dataFile);
   log(`\n4. Exported ${allSamples.length} samples → ${dataFile}`);
 
-  const ok = await trainWithPython([dataFile], SMOKE_MODEL_DIR, 2, allSamples.length, true, 0, LEARNING_RATE);
+  const ok = await trainWithPython("imitation", [dataFile], SMOKE_MODEL_DIR, 2, allSamples.length, true, 0, LEARNING_RATE);
   assert(ok, "python training failed");
 
   // ── 5. Reload exported model, play a full game ──

@@ -156,18 +156,21 @@ export function createSampleWriter(outPath: string) {
 
 // ─── Python training ───
 
+export type TrainObjective = "imitation" | "ppo";
+
 export async function trainWithPython(
-  dataFiles: string[], modelDir: string, epochs: number, numSamples: number, fresh: boolean, actionBalance: number, learningRate: number,
+  objective: TrainObjective, dataFiles: string[], modelDir: string, epochs: number, numSamples: number,
+  fresh: boolean, actionBalance: number, learningRate: number,
 ): Promise<boolean> {
   const pythonDir = path.resolve("training/python");
   const trainArgs = [
     "run", "python", "-m", "app.scripts.train",
-    "--data", ...dataFiles, "--model", modelDir,
+    "--objective", objective, "--data", ...dataFiles, "--model", modelDir,
     "--epochs", String(epochs), "--batch-size", String(BATCH_SIZE), "--lr", String(learningRate),
     ...(fresh ? ["--fresh"] : []),
     ...(actionBalance > 0 ? ["--balance-actions", String(actionBalance)] : []),
   ];
-  log(`\nTraining (${numSamples} samples, ${epochs} epochs, lr ${learningRate}${fresh ? ", fresh" : ""}${actionBalance > 0 ? `, action balance ${actionBalance}` : ""}):`);
+  log(`\nTraining (${objective}, ${numSamples} samples, ${epochs} epochs, lr ${learningRate}${fresh ? ", fresh" : ""}${actionBalance > 0 ? `, action balance ${actionBalance}` : ""}):`);
   return new Promise<boolean>((resolve) => {
     const proc = spawn("uv", trainArgs, {cwd: pythonDir, stdio: ["ignore", "pipe", "pipe"]});
     let lastLoss = 0;
@@ -178,7 +181,7 @@ export async function trainWithPython(
       buf = lines.pop()!;
       for (const line of lines) {
         const trimmed = line.trim();
-        if (trimmed.startsWith("epoch ") || trimmed.startsWith("ratio:") || trimmed.startsWith("Exported") || trimmed.startsWith("action class weights")) {
+        if (trimmed.startsWith("epoch ") || trimmed.startsWith("ratio:") || trimmed.startsWith("Exported") || trimmed.startsWith("action class weights") || trimmed.startsWith("ppo:")) {
           logRaw(`  ${trimmed}`);
         } else if (trimmed.startsWith("battle:")) {
           logRaw(`                 ${trimmed}`);

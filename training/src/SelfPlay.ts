@@ -93,8 +93,8 @@ function takeSnapshot(game: GameSystem, model: NNModel, records: RawRecord[], sn
  * V-improvement is always improvement toward the win). In mixed-outcome data
  * (draws/losses) pure TD reinforces locally V-raising turns inside globally
  * bad trajectories (the hoard-to-draw failure); λ > 0 propagates the terminal
- * truth backward so those turns end non-positive and are discarded by the
- * non-negative weight clamp.
+ * truth backward so those turns end non-positive and count against their
+ * actions in the trainer's clipped surrogate.
  *
  * Consumer-side: called at materialization time (TrajectoryStore), not by the
  * game runners, so stored trajectories serve any λ.
@@ -212,21 +212,18 @@ function computeOutcomes(game: GameSystem): number[] {
  * Convert raw records to training samples.
  *
  * value target = game outcome (win=1, loss=0, draw=1/3, eliminated=0)
- * policyWeight = turn-level TD advantage, clamped to be non-negative.
- *
- * DO NOT let negative policy weights through. They have been introduced and
- * removed several times in this project's history and collapsed the policy
- * every time: offline epochs flip CE/BCE into a push-away objective whose
- * gradient never saturates, so near-cancelling ± advantage noise nets out as
- * repulsion of everything the policy does and play degenerates to passivity
- * (all-draw evals). Reinforce good turns; ignore bad ones.
+ * policyWeight = the signed turn-level TD(λ) advantage. Only the trainer's
+ * clipped surrogate (objective ppo) may read a negative weight: its push-away
+ * stops at the clip. A CE/BCE loss with a negative weight is unbounded below
+ * and collapsed the policy every time it was tried, and the trainer asserts
+ * that its imitation objective never sees one.
  */
 export function recordsToSamples(records: RawRecord[], outcomes: number[]): Sample[] {
   return records.map(rec => {
     const s = emptySample(rec.playerIdx);
     s.state = rec.state;
     s.value = outcomes[rec.playerIdx];
-    s.policyWeight = Math.max(0, rec.advantage);
+    s.policyWeight = rec.advantage;
 
     // ε-random actions are noise, not policy: train only the value head on them
     if (rec.explored) return s;

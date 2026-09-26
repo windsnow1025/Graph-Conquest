@@ -331,18 +331,27 @@ All phases consume a named dataset from the store and do not simulate.
    V(own-turn start) from context-free critic snapshots, the final interval
    bootstraps to the terminal outcome (win=1, loss=0, draw=1/3); the λ backward
    recursion propagates the terminal truth through the trajectory
-3. Positive advantage weights only (w > 0, no magnitude threshold): reinforce
-   improving turns, discard negative ones; ε-explored decisions carry only value
-   labels (no policy target). Temperature sampling covers every head, the
-   fraction levels included, so each played level is an on-policy sample. A magnitude cutoff was tried and removed: the weight
-   already scales the gradient, and the cutoff selection-biased later iterations
-   toward the noisy tail once the critic flattened.
-   INVARIANT: policy weights must stay non-negative. Negative-weight training has
-   been introduced and abandoned repeatedly in this project and collapsed the
-   policy every time (offline push-away objective is unbounded and never
-   saturates, so ± advantage noise nets out as repulsion of all played actions).
+3. Objective (the trainer's `--objective ppo`): the sampled heads (action
+   type, move target, battle target, the fraction levels) train on the clipped
+   surrogate −min(r·A, clip(r, 1−ε, 1+ε)·A), r the ratio of the current to the
+   behavior probability of the recorded action, A the turn advantage
+   standardized over the dataset, ε = 0.2. The behavior probabilities are
+   recomputed from the starting weights, which the md5 check guarantees to be
+   the model that played the dataset, so nothing is stored per record. The
+   value head trains on the outcome MSE with coefficient 0.5; the battle select
+   and retreat heads, decoded by threshold rather than sampled, keep the BCE
+   weighted by max(A, 0). ε-explored decisions carry only value labels; the
+   temperature sampling covers every head, the fraction levels included.
+   Signed advantages enter only the surrogate: a CE/BCE loss with a negative
+   weight is unbounded below and collapsed the policy every time it was tried,
+   and the positive-only weighting that replaced it (v9 to v11) fitted the
+   policy to its own temperature-1 samples in winning games, which flattened
+   the heads toward the frequent labels (EXIT, stop) and collapsed into the draw
+   attractor (v11 phase 2: 27W 0L 54D from a 69W start, policy losses rising
+   from the first epoch).
 4. Value samples: per-turn context-free snapshots + 3 terminal samples per game
-5. Trains 4 epochs from the phase1 start, then the gate: an 81-game eval
+5. Trains 4 epochs from the phase1 start at learning rate RL_LR (default
+   0.0001), then the gate: an 81-game eval
    against the unified cached baseline of the base model (eval81.json in the
    model dir, measured once per weights md5, so every run is judged against
    the same reference); keep the trained model only if strictly better (wins,
@@ -354,9 +363,9 @@ All phases consume a named dataset from the store and do not simulate.
    - Part A: vs opponent rotation (Passive, Phase 1, Phase 2)
    - Part B: 3-NN self-play
 2. Only current model's decisions recorded (vs opponents); all decisions recorded (self-play)
-3. Same training signal and gate as Phase 2 (turn-level TD(λ) advantages,
-   positive only; 81-game eval vs the unified cached phase2 baseline, keep
-   only if strictly better)
+3. Same training signal and gate as Phase 2 (turn-level TD(λ) advantages in
+   the clipped surrogate; 81-game eval vs the unified cached phase2 baseline,
+   keep only if strictly better)
 4. 3 value-only samples per game (all players)
 5. Loads Phase 2 model, trains 4 epochs (20 degraded in one iteration historically)
 6. Output: training/model/phase3/

@@ -5,10 +5,9 @@
  * This script does not simulate; data comes from the trajectory store (see
  * generateData.ts). Materialization assigns λ-return advantages over
  * turn-level TD errors (δ = V(next own-turn start) − V(own-turn start), the
- * final interval bootstraps to the terminal outcome: win=1, loss=0, draw=1/3)
- * and keeps POSITIVE advantage weights only (negative weights collapse the
- * policy, see SelfPlay.recordsToSamples; ε-explored actions carry only value
- * labels).
+ * final interval bootstraps to the terminal outcome: win=1, loss=0, draw=1/3);
+ * the trainer's ppo objective takes them signed in a clipped surrogate
+ * (ε-explored actions carry only value labels).
  *
  * Loads the Phase 1 model as starting point, trains once, then gates: an
  * 81-game eval against the unified cached phase1 baseline (same reference for
@@ -17,7 +16,7 @@
  *
  * Usage: npx tsx training/scripts/trainPhase2.ts <dataset>
  *   <dataset>: a vs-random dataset generated from the current phase1 model
- * Env: EPOCHS (default 4), RL_LR (learning rate, default 0.001), ALLOW_STALE=1
+ * Env: EPOCHS (default 4), RL_LR (learning rate, default 0.0001), ALLOW_STALE=1
  *   skips the dataset↔model md5 check
  */
 import {setupBackend} from "../src/setupBackend";
@@ -33,7 +32,7 @@ import {
 // ─── Config ───
 
 const EPOCHS = Number(process.env.EPOCHS ?? "4");
-const RL_LEARNING_RATE = Number(process.env.RL_LR ?? "0.001");
+const RL_LEARNING_RATE = Number(process.env.RL_LR ?? "0.0001");
 if (!Number.isFinite(RL_LEARNING_RATE) || RL_LEARNING_RATE <= 0) {
   throw new Error(`Invalid RL_LR env value: ${process.env.RL_LR}`);
 }
@@ -110,14 +109,14 @@ async function main() {
   const dataFile = path.join(DATA_DIR, "phase2.bin");
   const t0 = Date.now();
   const {stats: m, cached} = materializeCached(dataDir, dataFile, TD_LAMBDA);
-  log(`\n${cached ? "Reusing materialized" : "Materialized"} ${m.kept}/${m.raw} samples (w > 0) in ${((Date.now() - t0) / 1000).toFixed(0)}s; ` +
-    `raw turn advantages: pos ${m.posAdv} / neg ${m.negAdv} (neg discarded)`);
-  if (m.kept === 0) {
-    log("No meaningful samples, aborting.");
+  log(`\n${cached ? "Reusing materialized" : "Materialized"} ${m.samples} samples in ${((Date.now() - t0) / 1000).toFixed(0)}s; ` +
+    `turn advantages: pos ${m.posAdv} / neg ${m.negAdv}`);
+  if (m.samples === 0) {
+    log("No samples, aborting.");
     return;
   }
 
-  const ok = await trainWithPython([dataFile], MODEL_DIR_PHASE2, EPOCHS, m.kept, false, 0, RL_LEARNING_RATE);
+  const ok = await trainWithPython("ppo", [dataFile], MODEL_DIR_PHASE2, EPOCHS, m.samples, false, 0, RL_LEARNING_RATE);
   if (!ok) {
     copyModelDir(MODEL_DIR_PHASE1, MODEL_DIR_PHASE2);
     log("Training failed; phase2 restored to the phase1 starting point.");

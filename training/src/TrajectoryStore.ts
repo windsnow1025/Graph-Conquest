@@ -287,8 +287,7 @@ export function readTrajectories(filePath: string, onGame: (game: PersistedGame,
 
 export interface MaterializeStats {
   games: number;
-  raw: number;
-  kept: number;
+  samples: number;
   posAdv: number;
   negAdv: number;
   wins: number;
@@ -296,12 +295,14 @@ export interface MaterializeStats {
   draws: number;
 }
 
+/** Names the sample semantics of a materialized file; a cached file of another kind is regenerated. */
+const MATERIALIZATION = "signed-advantages";
+
 /**
  * Convert a trajectory dataset into a trainer sample file, assigning TD(λ)
- * advantages at read time. Semantics are identical to the old inline pipeline:
- * policy records weighted by the non-negative advantage clamp, snapshot and
- * terminal value samples, ε-explored records value-only, then the w > 0 keep
- * filter. Decisive self-play games count as wins in the returned stats.
+ * advantages at read time: policy records weighted by their signed advantage,
+ * snapshot and terminal value samples, ε-explored records value-only.
+ * Decisive self-play games count as wins in the returned stats.
  */
 export function materializeSamples(dir: string, outPath: string, tdLambda: number): MaterializeStats {
   const manifest = readManifest(dir);
@@ -309,7 +310,7 @@ export function materializeSamples(dir: string, outPath: string, tdLambda: numbe
     throw new Error(`Dataset ${manifest.name} has format ${manifest.format}; only traj datasets can be materialized (regenerate stale ones)`);
   }
   const writer = createSampleWriter(outPath);
-  const stats: MaterializeStats = {games: 0, raw: 0, kept: 0, posAdv: 0, negAdv: 0, wins: 0, losses: 0, draws: 0};
+  const stats: MaterializeStats = {games: 0, samples: 0, posAdv: 0, negAdv: 0, wins: 0, losses: 0, draws: 0};
 
   readTrajectories(path.join(dir, "trajectories.bin"), (game) => {
     assignAdvantages(game.records, game.snapshots, game.outcomes, tdLambda);
@@ -326,11 +327,9 @@ export function materializeSamples(dir: string, outPath: string, tdLambda: numbe
       if (r.advantage > 0) stats.posAdv++;
       else if (r.advantage < 0) stats.negAdv++;
     }
-    const kept = samples.filter(s => s.policyWeight > 0);
-    writer.writeBatch(kept);
+    writer.writeBatch(samples);
     stats.games++;
-    stats.raw += samples.length;
-    stats.kept += kept.length;
+    stats.samples += samples.length;
     if (game.winnerIdx < 0) stats.draws++;
     else if (game.kind === GAME_KIND.selfPlay || game.winnerIdx === game.nnIdx) stats.wins++;
     else stats.losses++;
@@ -349,13 +348,14 @@ export function materializeCached(dir: string, outPath: string, tdLambda: number
   const metaPath = `${outPath}.meta.json`;
   if (fs.existsSync(metaPath) && fs.existsSync(outPath)) {
     const meta = JSON.parse(fs.readFileSync(metaPath, "utf8")) as
-      {dataset: string; createdAt: string; tdLambda: number; stats: MaterializeStats};
-    if (meta.dataset === manifest.name && meta.createdAt === manifest.createdAt && meta.tdLambda === tdLambda) {
+      {dataset: string; createdAt: string; tdLambda: number; materialization?: string; stats: MaterializeStats};
+    if (meta.dataset === manifest.name && meta.createdAt === manifest.createdAt && meta.tdLambda === tdLambda
+      && meta.materialization === MATERIALIZATION) {
       return {stats: meta.stats, cached: true};
     }
   }
   const stats = materializeSamples(dir, outPath, tdLambda);
   fs.writeFileSync(metaPath, JSON.stringify(
-    {dataset: manifest.name, createdAt: manifest.createdAt, tdLambda, stats}, null, 2) + "\n");
+    {dataset: manifest.name, createdAt: manifest.createdAt, tdLambda, materialization: MATERIALIZATION, stats}, null, 2) + "\n");
   return {stats, cached: false};
 }
