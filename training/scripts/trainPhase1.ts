@@ -18,7 +18,7 @@ import * as fs from "fs";
 import * as path from "path";
 import {datasetPath, readManifest, listDatasets} from "../src/TrajectoryStore";
 import {
-  MODEL_DIR_PHASE1,
+  MODEL_DIR_PHASE1, LEARNING_RATE,
   initLog, log,
   trainWithPython, testNNvsRandom, bootstrapModel,
 } from "../src/trainUtils";
@@ -78,7 +78,7 @@ async function main() {
   log("\nBaseline (before training):");
   await testNNvsRandom(MODEL_DIR_PHASE1);
 
-  const ok = await trainWithPython(dataFiles, MODEL_DIR_PHASE1, EPOCHS, samples, true, ACTION_BALANCE);
+  const ok = await trainWithPython(dataFiles, MODEL_DIR_PHASE1, EPOCHS, samples, true, ACTION_BALANCE, LEARNING_RATE);
   if (!ok) {
     log("Training failed.");
     return;

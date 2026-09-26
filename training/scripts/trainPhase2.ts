@@ -17,7 +17,8 @@
  *
  * Usage: npx tsx training/scripts/trainPhase2.ts <dataset>
  *   <dataset>: a vs-random dataset generated from the current phase1 model
- * Env: EPOCHS (default 4), ALLOW_STALE=1 skips the dataset↔model md5 check
+ * Env: EPOCHS (default 4), RL_LR (learning rate, default 0.001), ALLOW_STALE=1
+ *   skips the dataset↔model md5 check
  */
 import {setupBackend} from "../src/setupBackend";
 import * as fs from "fs";
@@ -32,6 +33,10 @@ import {
 // ─── Config ───
 
 const EPOCHS = Number(process.env.EPOCHS ?? "4");
+const RL_LEARNING_RATE = Number(process.env.RL_LR ?? "0.001");
+if (!Number.isFinite(RL_LEARNING_RATE) || RL_LEARNING_RATE <= 0) {
+  throw new Error(`Invalid RL_LR env value: ${process.env.RL_LR}`);
+}
 // Gate evals run the full 81 games against the unified cached baseline
 // (trainUtils.baselineEval): one shared reference per base model instead of a
 // fresh noisy 27-game read per run (the same model read 21W to 27W at 27
@@ -94,7 +99,7 @@ async function main() {
   }
   copyModelDir(MODEL_DIR_PHASE1, MODEL_DIR_PHASE2);
 
-  log(`\n=== Phase 2: Reinforcement (dataset ${datasetName}, λ=${TD_LAMBDA}, ${EPOCHS} epochs) ===`);
+  log(`\n=== Phase 2: Reinforcement (dataset ${datasetName}, λ=${TD_LAMBDA}, ${EPOCHS} epochs, lr ${RL_LEARNING_RATE}) ===`);
   const ds = manifest.stats;
   log(`Dataset: ${ds.games} games, W/L/D ${ds.wins}/${ds.losses}/${ds.draws}, avg turns ${ds.avgTurns}, simRev ${manifest.simRev}`);
 
@@ -112,7 +117,7 @@ async function main() {
     return;
   }
 
-  const ok = await trainWithPython([dataFile], MODEL_DIR_PHASE2, EPOCHS, m.kept, false, 0);
+  const ok = await trainWithPython([dataFile], MODEL_DIR_PHASE2, EPOCHS, m.kept, false, 0, RL_LEARNING_RATE);
   if (!ok) {
     copyModelDir(MODEL_DIR_PHASE1, MODEL_DIR_PHASE2);
     log("Training failed; phase2 restored to the phase1 starting point.");

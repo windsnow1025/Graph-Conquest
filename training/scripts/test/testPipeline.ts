@@ -23,7 +23,7 @@ import {encodeState, STATE_SIZE} from "../../../src/AI/nn/StateEncoder";
 import type {Sample} from "../../src/SampleTypes";
 import {sampleToFloats, emptySample, SAMPLE_FLOATS} from "../../src/SampleTypes";
 import {
-  initLog, log, exportSamples, trainWithPython, createRandomizedGame, DATA_DIR,
+  initLog, log, exportSamples, trainWithPython, createRandomizedGame, DATA_DIR, LEARNING_RATE,
 } from "../../src/trainUtils";
 import * as path from "path";
 import * as fs from "fs";
@@ -183,7 +183,7 @@ async function main() {
   exportSamples(allSamples, dataFile);
   log(`\n4. Exported ${allSamples.length} samples → ${dataFile}`);
 
-  const ok = await trainWithPython([dataFile], SMOKE_MODEL_DIR, 2, allSamples.length, true, 0);
+  const ok = await trainWithPython([dataFile], SMOKE_MODEL_DIR, 2, allSamples.length, true, 0, LEARNING_RATE);
   assert(ok, "python training failed");
 
   // ── 5. Reload exported model, play a full game ──
