@@ -396,6 +396,34 @@ head losses start at 0), and the categorical heads' losses rise during the
 published phase 1 model. v11 replaces the sigmoid fraction heads with
 categorical levels for this reason.
 
+## Results of the v11 Run (2026-09-26)
+
+Same instruments as above; every model is trained on `imit-v10` (100 greedy
+games) unless noted.
+
+| Model | 81 randomized | Draw diagnostic (27) |
+|-------|---------------|----------------------|
+| Phase 1, most likely level decoded | 48W 0L 33D | 17W 0L 10D |
+| Phase 1, expected level decoded (same weights) | 69W 0L 12D, avg win turn 26.2 | 23W 0L 4D |
+| Phase 1 on `imit-v10` + `stale-b` (80 stalemate games, 4 labeled turns each), published | 73W 0L 8D, avg win turn 21.6 | 26W 0L 1D |
+| Phase 1 on `imit-v10` + `stale-b` + `stale-c` (`stale-c`: 80 stalemate games of the model above) | 38W 0L 43D, avg win turn 15.3 | not run |
+
+The stalemate data targets the draw mechanism (see testDraws.ts and
+testHandoff.ts under Phase 1): the network dominates without taking the last
+recruit nodes, and greedy wins those positions in one turn. The second round
+regressed: its labels lean passive (battle target "stop" is 36% of `stale-c`'s
+labels against 22% in `imit-v10` and 8% in `stale-b`, DISBAND 5% of the army
+labels against 1%), the stalemate share of the mix rose from 25% to 40%, and
+the model draws with small armies where the first round finished. The plain
+model stalls at turn 30 in 41% of its games, the first-round model in 25%.
+
+Exploration play of the v11 phase 1 model (T=1, ε=0.1, every fraction head
+sampled) is much weaker than v10's: `vsr-b` reads 326W 0L 174D over 500 games,
+avg 64.4 turns (`vsr-a`, v10: 486W 0L 14D, 26.9 turns). Phase 2 on it with the
+positive-only weighting at lr 0.001: value loss 0.175 → 0.063 while every
+policy-head loss rose over the 4 epochs; gate 27W 0L 54D, rollback. That run
+motivated the clipped surrogate objective.
+
 ## Binary Sample Format (1435 floats per sample)
 
 ```

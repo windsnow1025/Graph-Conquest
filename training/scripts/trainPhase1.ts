@@ -78,7 +78,7 @@ async function main() {
   log("\nBaseline (before training):");
   await testNNvsRandom(MODEL_DIR_PHASE1);
 
-  const ok = await trainWithPython("imitation", dataFiles, MODEL_DIR_PHASE1, EPOCHS, samples, true, ACTION_BALANCE, LEARNING_RATE);
+  const ok = await trainWithPython("imitation", dataFiles, MODEL_DIR_PHASE1, EPOCHS, samples, true, ACTION_BALANCE, LEARNING_RATE, null);
   if (!ok) {
     log("Training failed.");
     return;

@@ -16,8 +16,10 @@
  *
  * Usage: npx tsx training/scripts/trainPhase2.ts <dataset>
  *   <dataset>: a vs-random dataset generated from the current phase1 model
- * Env: EPOCHS (default 4), RL_LR (learning rate, default 0.0001), ALLOW_STALE=1
- *   skips the dataset↔model md5 check
+ * Env: EPOCHS (default 4), RL_LR (learning rate, default 0.0001), RL_VALUE_COEF
+ *   (value loss coefficient, default 0.5), RL_DETACH_VALUE=1 (the value loss
+ *   trains the value head only), ALLOW_STALE=1 skips the dataset↔model md5
+ *   check
  */
 import {setupBackend} from "../src/setupBackend";
 import * as fs from "fs";
@@ -26,16 +28,13 @@ import {datasetPath, readManifest, listDatasets, materializeCached} from "../src
 import {
   MODEL_DIR_PHASE1, MODEL_DIR_PHASE2, DATA_DIR, BASELINE_GAMES,
   initLog, log,
-  trainWithPython, testNNvsRandom, copyModelDir, weightsMd5, baselineEval,
+  trainWithPython, testNNvsRandom, copyModelDir, weightsMd5, baselineEval, reinforcementSettings, describeReinforcement,
 } from "../src/trainUtils";
 
 // ─── Config ───
 
 const EPOCHS = Number(process.env.EPOCHS ?? "4");
-const RL_LEARNING_RATE = Number(process.env.RL_LR ?? "0.0001");
-if (!Number.isFinite(RL_LEARNING_RATE) || RL_LEARNING_RATE <= 0) {
-  throw new Error(`Invalid RL_LR env value: ${process.env.RL_LR}`);
-}
+const REINFORCEMENT = reinforcementSettings();
 // Gate evals run the full 81 games against the unified cached baseline
 // (trainUtils.baselineEval): one shared reference per base model instead of a
 // fresh noisy 27-game read per run (the same model read 21W to 27W at 27
@@ -98,7 +97,7 @@ async function main() {
   }
   copyModelDir(MODEL_DIR_PHASE1, MODEL_DIR_PHASE2);
 
-  log(`\n=== Phase 2: Reinforcement (dataset ${datasetName}, λ=${TD_LAMBDA}, ${EPOCHS} epochs, lr ${RL_LEARNING_RATE}) ===`);
+  log(`\n=== Phase 2: Reinforcement (dataset ${datasetName}, λ=${TD_LAMBDA}, ${EPOCHS} epochs, ${describeReinforcement(REINFORCEMENT)}) ===`);
   const ds = manifest.stats;
   log(`Dataset: ${ds.games} games, W/L/D ${ds.wins}/${ds.losses}/${ds.draws}, avg turns ${ds.avgTurns}, simRev ${manifest.simRev}`);
 
@@ -116,7 +115,7 @@ async function main() {
     return;
   }
 
-  const ok = await trainWithPython("ppo", [dataFile], MODEL_DIR_PHASE2, EPOCHS, m.samples, false, 0, RL_LEARNING_RATE);
+  const ok = await trainWithPython("ppo", [dataFile], MODEL_DIR_PHASE2, EPOCHS, m.samples, false, 0, REINFORCEMENT.learningRate, REINFORCEMENT);
   if (!ok) {
     copyModelDir(MODEL_DIR_PHASE1, MODEL_DIR_PHASE2);
     log("Training failed; phase2 restored to the phase1 starting point.");

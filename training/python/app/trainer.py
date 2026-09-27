@@ -44,9 +44,6 @@ def _active_mean(values, mask):
 # a negative weight ever reaches a CE/BCE loss again.
 PUSH_AWAY_CLAMP = 6.0
 
-# PPO: the value loss coefficient (the trunk is shared, the value fit must not
-# drown the policy surrogate)
-VALUE_COEF = 0.5
 
 
 def _weighted_active_mean(values, mask, weight):
@@ -209,17 +206,21 @@ def _policy_logp(pred, batch):
 
 class PPOContext:
     """Per-sample behavior log-probabilities under the starting weights (the
-    dataset's generating model), and the advantage standardization."""
+    dataset's generating model), the advantage standardization, and the value
+    loss settings: its coefficient (the trunk is shared, the value fit competes
+    with the surrogate) and whether it leaves the trunk to the policy."""
 
-    def __init__(self, old_logp, active, adv_mean, adv_std, clip):
+    def __init__(self, old_logp, active, adv_mean, adv_std, clip, value_coef, detach_value):
         self.old_logp = old_logp
         self.active = active
         self.adv_mean = adv_mean
         self.adv_std = adv_std
         self.clip = clip
+        self.value_coef = value_coef
+        self.detach_value = detach_value
 
 
-def prepare_ppo(model, data, batch_size, device, clip):
+def prepare_ppo(model, data, batch_size, device, clip, value_coef, detach_value):
     model.eval()
     n = data.shape[0]
     old_logp = np.zeros(n, dtype=np.float32)
@@ -233,8 +234,9 @@ def prepare_ppo(model, data, batch_size, device, clip):
     adv = data[:, OFF_POLICY_WEIGHT][active > 0]
     adv_mean = float(adv.mean()) if len(adv) > 0 else 0.0
     adv_std = float(adv.std()) if len(adv) > 1 else 1.0
-    print(f"ppo: {int(active.sum())} policy samples, advantage mean {adv_mean:.4f} std {adv_std:.4f}, clip {clip}", flush=True)
-    return PPOContext(old_logp, active, adv_mean, max(adv_std, 1e-6), clip)
+    print(f"ppo: {int(active.sum())} policy samples, advantage mean {adv_mean:.4f} std {adv_std:.4f}, clip {clip}, "
+          f"value coef {value_coef}{', value head detached from the trunk' if detach_value else ''}", flush=True)
+    return PPOContext(old_logp, active, adv_mean, max(adv_std, 1e-6), clip, value_coef, detach_value)
 
 
 def _compute_ppo_losses(model, batch, idx, ppo):
@@ -246,9 +248,9 @@ def _compute_ppo_losses(model, batch, idx, ppo):
     adv = (batch[:, OFF_POLICY_WEIGHT] - ppo.adv_mean) / ppo.adv_std
     old_logp = torch.from_numpy(ppo.old_logp[idx]).to(batch.device)
 
-    pred = model(state)
+    pred = model(state, detach_value=ppo.detach_value)
     pred_value = pred[0].squeeze(1)
-    v_loss = _active_mean((pred_value - value_target) ** 2, value_mask) * VALUE_COEF
+    v_loss = _active_mean((pred_value - value_target) ** 2, value_mask) * ppo.value_coef
 
     logp, active = _policy_logp(pred, batch)
     ratio = torch.exp(logp - old_logp)

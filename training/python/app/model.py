@@ -79,9 +79,12 @@ class GraphConquestNN(nn.Module):
         self.battle_retreat_hidden = nn.Linear(T + D + CTX_BRET_LEN, HEAD_HIDDEN)
         self.battle_retreat_head = nn.Linear(HEAD_HIDDEN, 1)
 
-    def forward(self, x):
+    def forward(self, x, detach_value=False):
+        """detach_value: the value head reads the trunk without gradient, so the
+        value loss trains the value head's own layers only (PPO option)."""
         h = torch.relu(self.dense1(x[:, :CONTEXT_OFFSET]))
         h = torch.relu(self.dense2(h))
+        hv = h.detach() if detach_value else h
 
         # Extract context segments
         B = CONTEXT_OFFSET
@@ -95,7 +98,7 @@ class GraphConquestNN(nn.Module):
         balloc = x[:, B + CTX_BALLOC_OFF:B + CTX_BALLOC_OFF + CTX_BALLOC_LEN]
         bret = x[:, B + CTX_BRET_OFF:B + CTX_BRET_OFF + CTX_BRET_LEN]
 
-        value = torch.sigmoid(self.value_head(torch.relu(self.value_hidden(h))))
+        value = torch.sigmoid(self.value_head(torch.relu(self.value_hidden(hv))))
         action_type = self.action_type_head(torch.relu(self.action_type_hidden(
             torch.cat([h, dt, army], dim=1))))
         move_frac = self.move_fraction_head(torch.relu(self.move_fraction_hidden(

@@ -158,9 +158,28 @@ export function createSampleWriter(outPath: string) {
 
 export type TrainObjective = "imitation" | "ppo";
 
+/** PPO settings of the reinforcement phases, read from the environment: RL_LR, RL_VALUE_COEF, RL_DETACH_VALUE=1. */
+export interface ReinforcementSettings {
+  learningRate: number;
+  valueCoef: number;
+  detachValue: boolean;
+}
+
+export function reinforcementSettings(): ReinforcementSettings {
+  const learningRate = Number(process.env.RL_LR ?? "0.0001");
+  const valueCoef = Number(process.env.RL_VALUE_COEF ?? "0.5");
+  if (!Number.isFinite(learningRate) || learningRate <= 0) throw new Error(`Invalid RL_LR env value: ${process.env.RL_LR}`);
+  if (!Number.isFinite(valueCoef) || valueCoef < 0) throw new Error(`Invalid RL_VALUE_COEF env value: ${process.env.RL_VALUE_COEF}`);
+  return {learningRate, valueCoef, detachValue: process.env.RL_DETACH_VALUE === "1"};
+}
+
+export function describeReinforcement(settings: ReinforcementSettings): string {
+  return `lr ${settings.learningRate}, value coef ${settings.valueCoef}${settings.detachValue ? ", value head detached" : ""}`;
+}
+
 export async function trainWithPython(
   objective: TrainObjective, dataFiles: string[], modelDir: string, epochs: number, numSamples: number,
-  fresh: boolean, actionBalance: number, learningRate: number,
+  fresh: boolean, actionBalance: number, learningRate: number, reinforcement: ReinforcementSettings | null,
 ): Promise<boolean> {
   const pythonDir = path.resolve("training/python");
   const trainArgs = [
@@ -169,6 +188,7 @@ export async function trainWithPython(
     "--epochs", String(epochs), "--batch-size", String(BATCH_SIZE), "--lr", String(learningRate),
     ...(fresh ? ["--fresh"] : []),
     ...(actionBalance > 0 ? ["--balance-actions", String(actionBalance)] : []),
+    ...(reinforcement ? ["--value-coef", String(reinforcement.valueCoef), ...(reinforcement.detachValue ? ["--detach-value"] : [])] : []),
   ];
   log(`\nTraining (${objective}, ${numSamples} samples, ${epochs} epochs, lr ${learningRate}${fresh ? ", fresh" : ""}${actionBalance > 0 ? `, action balance ${actionBalance}` : ""}):`);
   return new Promise<boolean>((resolve) => {

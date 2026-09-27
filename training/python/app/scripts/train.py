@@ -38,6 +38,9 @@ def main():
     parser = argparse.ArgumentParser(description="Train Graph Conquest NN v11")
     parser.add_argument("--objective", choices=["imitation", "ppo"], required=True)
     parser.add_argument("--clip", type=float, default=0.2, help="PPO clip range")
+    parser.add_argument("--value-coef", type=float, default=0.5, help="PPO value loss coefficient")
+    parser.add_argument("--detach-value", action="store_true",
+                        help="PPO: the value loss trains the value head only, the trunk follows the surrogate")
     parser.add_argument("--data", nargs="+", required=True, help="Binary sample files")
     parser.add_argument("--model", required=True, help="TF.js model directory (read + write)")
     parser.add_argument("--epochs", type=int, default=10)
@@ -68,7 +71,7 @@ def main():
     if args.objective == "ppo":
         if args.fresh:
             raise SystemExit("ppo needs a starting model: the data's generating model")
-        ppo = prepare_ppo(model, data, args.batch_size, device, args.clip)
+        ppo = prepare_ppo(model, data, args.batch_size, device, args.clip, args.value_coef, args.detach_value)
     else:
         if (data[:, OFF_POLICY_WEIGHT] < 0).any():
             raise SystemExit("imitation takes non-negative policy weights only")
