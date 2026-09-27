@@ -411,6 +411,10 @@ games) unless noted.
 | Phase 2 (clipped surrogate) from the published phase 1: `vsr-b`, 500 games, 1.54M samples, 4 epochs, lr 0.0001, value coef 0.5 | 76W 0L 5D, avg win turn 23.1 (second read 77W 0L 4D, 23.9) | |
 | Phase 3 (clipped surrogate) from phase 2: `mix-b`, 200 games, 873k samples, same settings, published | 77W 0L 4D, avg win turn 20.6 | |
 
+Against greedy the published phase 3 model loses every game: 0W 30L 0D in
+scripts/test/testVsGreedy.ts (the model in one seat, greedy in the other two,
+default config), and its draw diagnostic reads 25W 0L 2D over 27.
+
 Both reinforcement phases passed their gates with the clipped surrogate, the
 first gains of any reinforcement phase in this project. The surrogate moves
 little (phase 2: 0.0139 → 0.0100 over the 4 epochs, clip fraction 17%; phase 3
