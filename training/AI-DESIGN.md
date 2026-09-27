@@ -351,7 +351,8 @@ All phases consume a named dataset from the store and do not simulate.
    from the first epoch).
 4. Value samples: per-turn context-free snapshots + 3 terminal samples per game
 5. Trains 4 epochs from the phase1 start at learning rate RL_LR (default
-   0.0001), then the gate: an 81-game eval
+   0.0001) with value coefficient RL_VALUE_COEF (default 0.5; RL_DETACH_VALUE=1
+   trains the value head's own layers only), then the gate: an 81-game eval
    against the unified cached baseline of the base model (eval81.json in the
    model dir, measured once per weights md5, so every run is judged against
    the same reference); keep the trained model only if strictly better (wins,
@@ -407,6 +408,17 @@ games) unless noted.
 | Phase 1, expected level decoded (same weights) | 69W 0L 12D, avg win turn 26.2 | 23W 0L 4D |
 | Phase 1 on `imit-v10` + `stale-b` (80 stalemate games, 4 labeled turns each), published | 73W 0L 8D, avg win turn 21.6 | 26W 0L 1D |
 | Phase 1 on `imit-v10` + `stale-b` + `stale-c` (`stale-c`: 80 stalemate games of the model above) | 38W 0L 43D, avg win turn 15.3 | not run |
+| Phase 2 (clipped surrogate) from the published phase 1: `vsr-b`, 500 games, 1.54M samples, 4 epochs, lr 0.0001, value coef 0.5 | 76W 0L 5D, avg win turn 23.1 (second read 77W 0L 4D, 23.9) | |
+| Phase 3 (clipped surrogate) from phase 2: `mix-b`, 200 games, 873k samples, same settings, published | 77W 0L 4D, avg win turn 20.6 | |
+
+Both reinforcement phases passed their gates with the clipped surrogate, the
+first gains of any reinforcement phase in this project. The surrogate moves
+little (phase 2: 0.0139 → 0.0100 over the 4 epochs, clip fraction 17%; phase 3
+ended above its start) because the value loss and the BCE heads share the trunk
+and dominate the gradient: on a fixed batch the surrogate alone descends
+steadily while the joint objective barely lowers it. Untried settings for the
+next iteration: RL_DETACH_VALUE=1, a small RL_VALUE_COEF, and dropping the BCE
+heads from the objective.
 
 The stalemate data targets the draw mechanism (see testDraws.ts and
 testHandoff.ts under Phase 1): the network dominates without taking the last
