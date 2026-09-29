@@ -117,12 +117,18 @@ function App() {
           : await aiTurnSteps(g);
         if (cancelled) return;
         if (!gen) { update(); continue; }
-        await new Promise<void>((resolve) => {
+        // A step runs in a timer callback: a throw there (an AI decision, the game engine)
+        // must reject this promise to reach the catch below instead of dying uncaught
+        await new Promise<void>((resolve, reject) => {
           const step = () => {
             if (cancelled) { resolve(); return; }
-            const result = gen.next();
-            update();
-            if (!result.done) setTimeout(step, 0); else resolve();
+            try {
+              const result = gen.next();
+              update();
+              if (!result.done) setTimeout(step, 0); else resolve();
+            } catch (e) {
+              reject(e);
+            }
           };
           setTimeout(step, 0);
         });
