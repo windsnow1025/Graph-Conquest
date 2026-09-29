@@ -12,6 +12,7 @@ src/AI/
     FractionBins.ts     # The FRACTION_BINS levels every fraction head chooses from
     StateEncoder.ts     # State → Float32Array[1360], 8 decision contexts
     NNModel.ts          # TF.js model v11: per-head context shortcut, 11 output heads, categorical fraction heads
+    WebModel.ts         # The web model file: the model as one JSON document with base64 weights, the page's only model request
     ActionSpace.ts      # 3 action types, masks, per-group execution
 
 training/
@@ -20,7 +21,7 @@ training/
     trainPhase1.ts      # Phase 1: imitation learning on an imitation dataset
     trainPhase2.ts      # Phase 2: RL on a vs-random dataset (TD(λ) weighting)
     trainPhase3.ts      # Phase 3: mixed RL on a mixed dataset
-    publishModel.ts     # Publish a trained model → public/model/ (web UI)
+    publishModel.ts     # Publish a trained model → public/model/: TF.js layout for the Node scripts, web.json for the page
     test/               # Model comparison / value-head evaluation scripts
   src/
     Opponents.ts        # random/passive opponents (same 4-phase loop as NN)

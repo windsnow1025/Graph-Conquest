@@ -126,8 +126,8 @@ export class NNModel {
     });
   }
 
-  async load(pathOrHandler: string | tf.io.IOHandler): Promise<void> {
-    const model = await tf.loadLayersModel(pathOrHandler);
+  async load(handler: tf.io.IOHandler): Promise<void> {
+    const model = await tf.loadLayersModel(handler);
     const sizes = model.outputs.map(output => output.shape[1]);
     if (sizes.length !== HEAD_SIZES.length || sizes.some((size, i) => size !== HEAD_SIZES[i])) {
       model.dispose();
@@ -136,9 +136,9 @@ export class NNModel {
     this.model = model;
   }
 
-  async save(pathOrHandler: string | tf.io.IOHandler): Promise<void> {
+  async save(handler: tf.io.IOHandler): Promise<void> {
     if (!this.model) throw new Error("No model to save");
-    await this.model.save(pathOrHandler);
+    await this.model.save(handler);
   }
 
   predict(stateEncoding: Float32Array): NNPrediction {
