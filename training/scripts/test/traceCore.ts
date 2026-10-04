@@ -1,9 +1,9 @@
 /**
  * Deterministic behavior trace of the core, for comparing it before and after
  * a refactor. Math.random is replaced by a seeded generator; the script then
- * plays random-vs-random games on randomized configs and one 3-NN game on the
- * default config (the published model, deterministic play), and prints one
- * line per turn: the money and unit count of every player and a hash of the
+ * plays random-vs-random games and greedy-vs-random games on randomized
+ * configs and one 3-NN game on the default config (the published model,
+ * deterministic play), and prints one line per turn: the money and unit count of every player and a hash of the
  * saved state. Two runs print the same lines exactly when the games are the
  * same.
  *
@@ -16,12 +16,14 @@ import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import GameSystem from "../../../src/lib/GameSystem";
 import Config from "../../../src/lib/data/Config";
 import {randomTurn} from "../../src/Opponents";
+import {greedyTurn} from "../../src/GreedyAI";
 import {createRandomizedGame} from "../../src/trainUtils";
 import * as crypto from "crypto";
 import * as path from "path";
 
 const SEED = 20261003;
 const RANDOM_GAMES = 40;
+const GREEDY_GAMES = 3;
 
 /** mulberry32 */
 function seededRandom(seed: number): () => number {
@@ -58,6 +60,18 @@ async function main() {
       console.log(turnLine(`R${g}`, game, turn, playerIdx));
     }
     console.log(endLine(`R${g}`, game));
+  }
+
+  for (let g = 0; g < GREEDY_GAMES; g++) {
+    const game = createRandomizedGame();
+    const greedyIdx = g % 3;
+    while (!game.gameOver) {
+      const turn = game.turnCount, playerIdx = game.currentPlayerIndex;
+      if (playerIdx === greedyIdx) greedyTurn(game);
+      else randomTurn(game);
+      console.log(turnLine(`G${g}`, game, turn, playerIdx));
+    }
+    console.log(endLine(`G${g}`, game));
   }
 
   const model = new NNModel();
