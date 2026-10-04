@@ -4,8 +4,7 @@
 import {NNModel} from "../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "./nodeIO";
 import GameSystem from "../../src/lib/GameSystem";
-import Graph from "../../src/lib/Graph";
-import Player from "../../src/lib/Player";
+import type Player from "../../src/lib/Player";
 import Config from "../../src/lib/data/Config";
 import type {GameConfig} from "../../src/lib/Config";
 import {UNIT_TYPES} from "../../src/AI/nn/GameIndex";
@@ -61,20 +60,18 @@ export function createRandomizedConfig(): GameConfig {
   }
 
   // Node income
-  const graphJSON = Config.gameMap.toJSON();
-  for (const node of graphJSON.nodes) {
+  const gameMap = structuredClone(Config.gameMap);
+  for (const node of gameMap.nodes) {
     node.data.income = randomizeStat(node.data.income, V);
   }
 
   // Players
   const baseMoney = 100;
-  const players = Config.players.map(p =>
-    new Player(randomizeStat(baseMoney, V), p.name, p.homeLocation)
-  );
+  const players = Config.players.map(p => ({...p, money: randomizeStat(baseMoney, V)}));
 
   return {
     ...Config,
-    gameMap: Graph.fromJSON(graphJSON),
+    gameMap,
     unitStatsMap: newStats,
     interestRate: randomBetween(Config.interestRate * (1 - V), Config.interestRate * (1 + V)),
     upkeepRate: randomBetween(Config.upkeepRate * (1 - V), Config.upkeepRate * (1 + V)),

@@ -291,7 +291,7 @@ commitment labels:
 
 **DAgger mode**: NN plays the game (encounters its own states), greedy provides labels at each decision point. Addresses distribution shift between greedy's states and NN's states. `generateData.ts imitation --dagger-model <name>` plays the DAgger games with a trained model (a fresh random-weight model without it). A second imitation round on 50 such games plus 70 greedy games did not help in this design: the model trained on it scored 16W 0L 11D over 27 games vs Random against 21W 0L 6D for the model trained on the 100-game greedy dataset alone, so phase 1 uses the default dataset.
 
-**Config variance** (±25%, all phases + tests): unit stats (attack, defend, health, cost), node income, interest rate, upkeep rate, player starting money. Range and speed not randomized. Each game gets independent Graph clone. Shared via `createRandomizedGame()` in trainUtils.
+**Config variance** (±25%, all phases + tests): unit stats (attack, defend, health, cost), node income, interest rate, upkeep rate, player starting money. Range and speed not randomized. Each game gets an independent copy of the map data. Shared via `createRandomizedGame()` in trainUtils.
 
 **Position rotation**: greedy/NN plays as Blue(0), Red(1), Green(2), rotating across games (g%3).
 
