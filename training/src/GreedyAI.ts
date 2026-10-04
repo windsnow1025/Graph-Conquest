@@ -71,7 +71,7 @@ export function scorePlayer(game: GameSystem, playerIdx: number): number {
     if (owner === player) nodeIncome += game.gameMap.getNodeData(node)?.income ?? 0;
   }
   const interest = Math.floor(player.money * game.interestRate);
-  const upkeep = player.getUpkeep(game.upkeepRate);
+  const upkeep = game.getUpkeep(player);
   return nodeIncome + interest + upkeep;
 }
 
@@ -343,7 +343,7 @@ function simpleNextTurn(game: GameSystem, playerIdx: number): void {
     if (owner === player) nodeIncome += game.gameMap.getNodeData(node)?.income ?? 0;
   }
   player.money += nodeIncome;
-  player.money -= player.getUpkeep(game.upkeepRate);
+  player.money -= game.getUpkeep(player);
   player.resetAllArmyTurns();
   // play a full simple turn
   simpleArmyActions(game, playerIdx);

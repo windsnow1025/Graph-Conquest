@@ -250,7 +250,7 @@ already processed in the phase do not act again until the next army phase.
 scorePlayer(game, playerIdx):
   nodeIncome = sum of income from owned nodes
   interest = floor(money × interestRate)
-  upkeep = player.getUpkeep(upkeepRate)
+  upkeep = game.getUpkeep(player)
   return nodeIncome + interest + upkeep
 ```
 

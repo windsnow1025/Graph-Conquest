@@ -510,7 +510,7 @@ function App() {
             for (const [node, owner] of game.nodeOwnership) {
               if (owner === player) income += game.gameMap.getNodeData(node)!.income;
             }
-            const upkeep = player.getUpkeep(Config.upkeepRate);
+            const upkeep = game.getUpkeep(player);
             const interest = Math.floor(player.money * Config.interestRate);
             const net = income + interest - upkeep;
             const isCurrent = player === currentPlayer;

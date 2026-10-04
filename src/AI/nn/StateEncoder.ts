@@ -265,7 +265,7 @@ export function encodeState(
 
     buf[offset++] = (p.money * game.interestRate) / 10;
 
-    buf[offset++] = p.getUpkeep(game.upkeepRate) / 20;
+    buf[offset++] = game.getUpkeep(p) / 20;
 
     const totalUnits = p.armies.reduce((sum, a) => sum + a.units.length, 0);
     buf[offset++] = totalUnits / 200;
