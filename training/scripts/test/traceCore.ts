@@ -17,25 +17,13 @@ import GameSystem from "../../../src/lib/GameSystem";
 import Config from "../../../src/lib/data/Config";
 import {randomTurn} from "../../src/Opponents";
 import {greedyTurn} from "../../src/GreedyAI";
-import {createRandomizedGame} from "../../src/trainUtils";
+import {createRandomizedGame, seededRandom} from "../../src/trainUtils";
 import * as crypto from "crypto";
 import * as path from "path";
 
 const SEED = 20261003;
 const RANDOM_GAMES = 40;
 const GREEDY_GAMES = 3;
-
-/** mulberry32 */
-function seededRandom(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6D2B79F5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 function turnLine(label: string, game: GameSystem, turn: number, playerIdx: number): string {
   const money = game.players.map(p => p.money).join(",");

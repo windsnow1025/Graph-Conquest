@@ -83,6 +83,20 @@ export function createRandomizedConfig(): GameConfig {
 export function createRandomizedGame(): GameSystem {
   return new GameSystem(createRandomizedConfig());
 }
+
+// ─── Seeded randomness ───
+
+/** A mulberry32 generator; assigned to Math.random, it makes the simulations of a script reproducible. */
+export function seededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6D2B79F5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 export const BATCH_SIZE = 64;
 export const LEARNING_RATE = 0.001;
 export const TEST_GAMES = 9;
