@@ -15,7 +15,7 @@
  */
 import {setupBackend} from "../../src/setupBackend";
 import GameSystem from "../../../src/lib/GameSystem";
-import Config from "../../../src/lib/data/Config";
+import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
@@ -80,7 +80,7 @@ function runGame(
   nnPlayerIdx: number,
   opponentType: OpponentType,
 ): GameResult {
-  const game = new GameSystem(Config);
+  const game = new GameSystem(DefaultConfig);
 
   for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
     const playerIdx = game.currentPlayerIndex;

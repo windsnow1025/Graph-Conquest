@@ -9,7 +9,7 @@ import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
 import Chip from "@mui/material/Chip";
 import GameSystem, {type GameSave} from "./lib/GameSystem";
-import Config from "./lib/data/Config";
+import DefaultConfig from "./lib/data/DefaultConfig";
 import Player from "./lib/Player";
 import Army from "./lib/Army";
 import type Unit from "./lib/Unit";
@@ -31,7 +31,7 @@ const NO_PLAYERS = new Set<string>();
 const overlayPaper = {opacity: 0.9, pointerEvents: "auto" as const};
 
 function App() {
-  const gameRef = useRef(new GameSystem(Config));
+  const gameRef = useRef(new GameSystem(DefaultConfig));
   const [version, setVersion] = useState(0);
   const [selectedArmy, setSelectedArmy] = useState<Army | null>(null);
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
@@ -180,7 +180,7 @@ function App() {
 
   // --- Handlers ---
   const handleModeSelect = useCallback((mode: GameMode) => {
-    gameRef.current = new GameSystem(Config);
+    gameRef.current = new GameSystem(DefaultConfig);
     setVersion(0);
     clearSelection();
     clearBattleAttack();
@@ -511,7 +511,7 @@ function App() {
               if (owner === player) income += game.gameMap.getNodeData(node)!.income;
             }
             const upkeep = game.getUpkeep(player);
-            const interest = Math.floor(player.money * Config.interestRate);
+            const interest = Math.floor(player.money * DefaultConfig.interestRate);
             const net = income + interest - upkeep;
             const isCurrent = player === currentPlayer;
             return (
@@ -525,7 +525,7 @@ function App() {
                     <tr><td>Cash</td><td>${player.money}</td></tr>
                     <tr><td>Units</td><td>{units}</td></tr>
                     <tr><td>Income</td><td>+{income}</td></tr>
-                    <tr><td>Interest ({Config.interestRate * 100}%)</td><td>+{interest}</td></tr>
+                    <tr><td>Interest ({DefaultConfig.interestRate * 100}%)</td><td>+{interest}</td></tr>
                     <tr><td>Upkeep</td><td style={{color: upkeep > 0 ? "#f44336" : undefined}}>-{upkeep}</td></tr>
                     <tr><td><b>Net/turn</b></td><td style={{color: net >= 0 ? "#66bb6a" : "#f44336", fontWeight: "bold"}}>{net >= 0 ? "+" : ""}{net}</td></tr>
                   </tbody>
@@ -693,7 +693,7 @@ function App() {
             <Button variant="outlined" size="small" sx={{textTransform: "none"}} onClick={() => setSaveLoadMode("load")}>Load</Button>
             {game.gameOver ? (
               <Button variant="contained" size="small" sx={{textTransform: "none", gridColumn: "1 / -1"}} onClick={() => {
-                gameRef.current = new GameSystem(Config);
+                gameRef.current = new GameSystem(DefaultConfig);
                 setVersion(0);
                 clearSelection();
                 clearBattleAttack();
@@ -707,7 +707,7 @@ function App() {
                   End Turn
                 </Button>
                 <Button variant="outlined" size="small" sx={{textTransform: "none"}} onClick={() => {
-                  gameRef.current = new GameSystem(Config);
+                  gameRef.current = new GameSystem(DefaultConfig);
                   setVersion(0);
                   clearSelection();
                   clearBattleAttack();

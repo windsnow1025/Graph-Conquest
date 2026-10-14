@@ -7,7 +7,7 @@ import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import GameSystem from "../../../src/lib/GameSystem";
-import Config from "../../../src/lib/data/Config";
+import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {greedyTurn, scorePlayer} from "../../src/GreedyAI";
 import {MODEL_DIR_PHASE2, MAX_TURNS} from "../../src/trainUtils";
 
@@ -22,7 +22,7 @@ async function main() {
   let nnWins = 0, greedyWins = 0, draws = 0;
 
   for (let g = 0; g < GAMES; g++) {
-    const game = new GameSystem(Config);
+    const game = new GameSystem(DefaultConfig);
     const nnIdx = g % 3;
     const greedyIdx = (g + 1) % 3;
 

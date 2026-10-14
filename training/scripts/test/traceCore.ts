@@ -14,7 +14,7 @@ import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import GameSystem from "../../../src/lib/GameSystem";
-import Config from "../../../src/lib/data/Config";
+import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {randomTurn} from "../../src/Opponents";
 import {greedyTurn} from "../../src/GreedyAI";
 import {createRandomizedGame, seededRandom} from "../../src/trainUtils";
@@ -64,7 +64,7 @@ async function main() {
 
   const model = new NNModel();
   await model.load(nodeFileSystem(path.resolve("public/model")));
-  const game = new GameSystem(Config);
+  const game = new GameSystem(DefaultConfig);
   while (!game.gameOver) {
     const turn = game.turnCount, playerIdx = game.currentPlayerIndex;
     executeNNTurn(game, model);

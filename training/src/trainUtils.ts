@@ -5,7 +5,7 @@ import {NNModel} from "../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "./nodeIO";
 import GameSystem from "../../src/lib/GameSystem";
 import type Player from "../../src/lib/Player";
-import Config from "../../src/lib/data/Config";
+import DefaultConfig from "../../src/lib/data/DefaultConfig";
 import type {GameConfig} from "../../src/lib/Config";
 import {UNIT_TYPES} from "../../src/AI/nn/GameIndex";
 import {executeNNTurn} from "../../src/AI/TurnExecutor";
@@ -48,7 +48,7 @@ export function createRandomizedConfig(): GameConfig {
   // Unit stats
   const newStats: Record<string, {attack: number; defend: number; health: number; range: number; speed: number; cost: number}> = {};
   for (const typeName of UNIT_TYPES) {
-    const orig = Config.unitStatsMap[typeName];
+    const orig = DefaultConfig.unitStatsMap[typeName];
     newStats[typeName] = {
       attack: randomizeStat(orig.attack, V),
       defend: randomizeStat(orig.defend, V),
@@ -60,21 +60,21 @@ export function createRandomizedConfig(): GameConfig {
   }
 
   // Node income
-  const gameMap = structuredClone(Config.gameMap);
+  const gameMap = structuredClone(DefaultConfig.gameMap);
   for (const node of gameMap.nodes) {
     node.data.income = randomizeStat(node.data.income, V);
   }
 
   // Players
   const baseMoney = 100;
-  const players = Config.players.map(p => ({...p, money: randomizeStat(baseMoney, V)}));
+  const players = DefaultConfig.players.map(p => ({...p, money: randomizeStat(baseMoney, V)}));
 
   return {
-    ...Config,
+    ...DefaultConfig,
     gameMap,
     unitStatsMap: newStats,
-    interestRate: randomBetween(Config.interestRate * (1 - V), Config.interestRate * (1 + V)),
-    upkeepRate: randomBetween(Config.upkeepRate * (1 - V), Config.upkeepRate * (1 + V)),
+    interestRate: randomBetween(DefaultConfig.interestRate * (1 - V), DefaultConfig.interestRate * (1 + V)),
+    upkeepRate: randomBetween(DefaultConfig.upkeepRate * (1 - V), DefaultConfig.upkeepRate * (1 + V)),
     players,
     neutralGarrison: { unitType: "Infantry", unitStats: newStats.Infantry },
   };

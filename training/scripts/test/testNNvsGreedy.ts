@@ -6,7 +6,7 @@ import {setupBackend} from "../../src/setupBackend";
 import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import GameSystem from "../../../src/lib/GameSystem";
-import Config from "../../../src/lib/data/Config";
+import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {randomTurn} from "../../src/Opponents";
 import {greedyTurn, scorePlayer} from "../../src/GreedyAI";
@@ -24,7 +24,7 @@ async function main() {
   let wins = 0, losses = 0, draws = 0;
 
   for (let g = 0; g < numGames; g++) {
-    const game = new GameSystem(Config);
+    const game = new GameSystem(DefaultConfig);
     // Rotate: NN and Greedy swap positions, 3rd player is random
     const nnIdx = g % 3;
     const greedyIdx = (g + 1) % 3;

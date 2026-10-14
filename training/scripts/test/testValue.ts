@@ -13,7 +13,7 @@ import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import type {TurnOptions, DecisionInfo} from "../../../src/AI/TurnExecutor";
 import GameSystem from "../../../src/lib/GameSystem";
-import Config from "../../../src/lib/data/Config";
+import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {encodeState} from "../../../src/AI/nn/StateEncoder";
 import {randomTurn} from "../../src/Opponents";
 import {terminalValue, DRAW_VALUE} from "../../src/SampleTypes";
@@ -35,7 +35,7 @@ async function evaluateValueHead(label: string, modelDir: string) {
   let wins = 0, losses = 0, draws = 0;
 
   for (let g = 0; g < NUM_GAMES; g++) {
-    const game = new GameSystem(Config);
+    const game = new GameSystem(DefaultConfig);
     const nnIdx = g % 3;
     // Record value predictions for all 3 players each turn
     const perPlayerRecords: { turnCount: number; predValue: number; playerIdx: number }[] = [];

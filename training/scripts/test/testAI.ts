@@ -7,7 +7,7 @@
  */
 import {setupBackend} from "../../src/setupBackend";
 import GameSystem from "../../../src/lib/GameSystem";
-import Config from "../../../src/lib/data/Config";
+import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
@@ -37,7 +37,7 @@ async function runGame(model: NNModel, maxTurns: number, gameIndex: number): Pro
   winner: string | null;
   turns: number;
 }> {
-  const game = new GameSystem(Config);
+  const game = new GameSystem(DefaultConfig);
 
   console.log(`\n${"═".repeat(60)}`);
   console.log(`  Game ${gameIndex + 1}`);

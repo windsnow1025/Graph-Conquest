@@ -6,7 +6,7 @@ import {setupBackend} from "../../src/setupBackend";
 import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import GameSystem from "../../../src/lib/GameSystem";
-import Config from "../../../src/lib/data/Config";
+import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {randomTurn} from "../../src/Opponents";
 import {scorePlayer} from "../../src/GreedyAI";
@@ -24,7 +24,7 @@ async function main() {
   let wins = 0, losses = 0, draws = 0;
 
   for (let g = 0; g < numGames; g++) {
-    const game = new GameSystem(Config);
+    const game = new GameSystem(DefaultConfig);
     const nnIdx = g % 3;
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
       if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model);
