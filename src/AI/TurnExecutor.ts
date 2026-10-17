@@ -31,7 +31,7 @@ import {
 } from "./nn/NNModel";
 import {battleStuckReport} from "./battleReport";
 import {NODE_ORDER, NUM_NODES, UNIT_TYPES} from "./nn/GameIndex";
-import {encodeState, perTypeState} from "./nn/StateEncoder";
+import {encodeState, perTypeState, rulesOf} from "./nn/StateEncoder";
 import type {DecisionContext} from "./nn/StateEncoder";
 import {
   computeActionTypeMask, executeArmyAction, unitsToCommit,
@@ -134,7 +134,7 @@ function* armyActionsPhase(
       const actionMask = computeActionTypeMask(game, army);
       const disbandMask = groupMask(disbandGroups(army.units));
       const context: DecisionContext = {type: "army", army, actionTypeMask: actionMask, disbandMask};
-      const state = encodeState(game, playerIdx, context);
+      const state = encodeState(game, rulesOf(game), playerIdx, context);
       const pred = model.predict(state);
 
       const {choice: actionType, explored: actionExplored} = chooseAction(pred.actionTypeLogits, actionMask, temp, eps);
@@ -151,7 +151,7 @@ function* armyActionsPhase(
           legalMask[NODE_ORDER.indexOf(dest)] = 1;
         }
         const moveContext: DecisionContext = {type: "moveTarget", army, legalMask};
-        const moveState = encodeState(game, playerIdx, moveContext);
+        const moveState = encodeState(game, rulesOf(game), playerIdx, moveContext);
         const movePred = model.predict(moveState);
         const move = chooseAction(movePred.moveTargetLogits, legalMask, temp, eps);
         targetIdx = move.choice;
@@ -162,7 +162,7 @@ function* armyActionsPhase(
         const countContext: DecisionContext = {
           type: "moveCount", army, destinationIdx: targetIdx, groupMask: groupMask(moveGroups(candidates)),
         };
-        const countState = encodeState(game, playerIdx, countContext);
+        const countState = encodeState(game, rulesOf(game), playerIdx, countContext);
         const countPred = model.predict(countState);
         const count = chooseFractions(countPred.moveFractionLogits, NUM_MOVE_GROUPS, temp, eps);
         fractions = count.value;
@@ -213,7 +213,7 @@ function* battleAllocatePhase(
         type: "battleAllocate", army, remaining, enemyArmy: target,
         attackProgress: 1 - battle.getRemainingAttacks(army) / battle.maxArmyAttacks, isAttacker, unitsNeeded: killNeeded,
       };
-      const state = encodeState(game, playerIdx, context);
+      const state = encodeState(game, rulesOf(game), playerIdx, context);
       const pred = model.predict(state);
 
       const kfChoice = chooseFractions(pred.killFractionLogits, 1, temp, eps);
@@ -276,7 +276,7 @@ function* battleLoop(
         const context: DecisionContext = {
           type: "battleRetreat", targetNodeIdx, attackProgress: 1 - remainingAttacks / battle.maxArmyAttacks,
         };
-        const state = encodeState(game, playerIdx, context);
+        const state = encodeState(game, rulesOf(game), playerIdx, context);
         const pred = model.predict(state);
         const retreat = chooseBinary(pred.battleRetreat, eps);
         opts.onDecision?.({playerIdx, state, pred, action: {type: "battleRetreat", battleRetreat: retreat.choice ? 1 : 0},
@@ -317,7 +317,7 @@ function selectBattleArmies(
         type: "battleSelect", army, targetNodeIdx, selectedPerType, remainingPerType, isDone: false,
         commitMask: groupMask(commitGroups(army.attackCandidates)),
       };
-      const state = encodeState(game, playerIdx, context);
+      const state = encodeState(game, rulesOf(game), playerIdx, context);
       return {army, state, pred: model.predict(state)};
     });
     if (selected.size > 0) {
@@ -325,7 +325,7 @@ function selectBattleArmies(
         type: "battleSelect", army: null, targetNodeIdx, selectedPerType, remainingPerType, isDone: true,
         commitMask: new Float32Array(NUM_COMMIT_GROUPS),
       };
-      const state = encodeState(game, playerIdx, context);
+      const state = encodeState(game, rulesOf(game), playerIdx, context);
       options.push({army: null, state, pred: model.predict(state)});
     }
 
@@ -372,7 +372,7 @@ function* battlePhase(
     optionMask[BATTLE_TARGET_STOP] = 1;
 
     const targetContext: DecisionContext = {type: "battleTarget", attackableMask};
-    const targetState = encodeState(game, playerIdx, targetContext);
+    const targetState = encodeState(game, rulesOf(game), playerIdx, targetContext);
     const targetPred = model.predict(targetState);
     const target = chooseAction(targetPred.battleTargetLogits, optionMask, temp, eps);
     const choice = target.choice;
@@ -417,7 +417,7 @@ function* recruitPhase(
       if (affordable <= 0) continue;
 
       const context: DecisionContext = {type: "recruit", locationIdx: locIdx, unitType, affordableCount: affordable};
-      const state = encodeState(game, playerIdx, context);
+      const state = encodeState(game, rulesOf(game), playerIdx, context);
       const pred = model.predict(state);
 
       const frac = chooseFractions(pred.recruitFractionLogits, 1, temp, eps);

@@ -22,7 +22,7 @@ import type Battle from "../../src/lib/Battle";
 import {BattlePhase, BattleResult} from "../../src/lib/Battle";
 import {calculateUnitsNeeded} from "../../src/lib/Combat";
 import {NODE_ORDER, NUM_NODES, UNIT_TYPES} from "../../src/AI/nn/GameIndex";
-import {encodeState, perTypeState} from "../../src/AI/nn/StateEncoder";
+import {encodeState, perTypeState, rulesOf} from "../../src/AI/nn/StateEncoder";
 import type {DecisionContext} from "../../src/AI/nn/StateEncoder";
 import {
   computeActionTypeMask, executeArmyAction, unitsToCommit,
@@ -411,7 +411,7 @@ function* lookaheadArmyActions(game: GameSystem, playerIdx: number, samples: Sam
       // Record
       if (samples) {
         const s = emptySample(playerIdx);
-        s.state = encodeState(game, playerIdx, {type: "army", army, actionTypeMask: mask, disbandMask});
+        s.state = encodeState(game, rulesOf(game), playerIdx, {type: "army", army, actionTypeMask: mask, disbandMask});
         s.actionTypeTarget = bestAction;
         s.actionTypeMask = new Float32Array(mask);
         if (bestAction === ACTION_DISBAND) { s.disbandFraction = bestFractions; s.disbandMask = disbandMask; }
@@ -421,7 +421,7 @@ function* lookaheadArmyActions(game: GameSystem, playerIdx: number, samples: Sam
         if (bestAction === ACTION_MOVE) {
           const legalMask = moveLegalMask(game, army);
           const ms = emptySample(playerIdx);
-          ms.state = encodeState(game, playerIdx, {type: "moveTarget", army, legalMask});
+          ms.state = encodeState(game, rulesOf(game), playerIdx, {type: "moveTarget", army, legalMask});
           ms.moveTargetIdx = bestTarget;
           ms.moveMask = legalMask;
           ms.value = bestQ;
@@ -429,7 +429,7 @@ function* lookaheadArmyActions(game: GameSystem, playerIdx: number, samples: Sam
 
           const moveGroupMask = groupMask(moveGroups(army.getMoveCandidates(NODE_ORDER[bestTarget], game.gameMap, game.enemyLocations)));
           const cs = emptySample(playerIdx);
-          cs.state = encodeState(game, playerIdx, {type: "moveCount", army, destinationIdx: bestTarget, groupMask: moveGroupMask});
+          cs.state = encodeState(game, rulesOf(game), playerIdx, {type: "moveCount", army, destinationIdx: bestTarget, groupMask: moveGroupMask});
           cs.moveFraction = bestFractions;
           cs.moveFractionMask = moveGroupMask;
           cs.value = bestQ;
@@ -440,14 +440,14 @@ function* lookaheadArmyActions(game: GameSystem, playerIdx: number, samples: Sam
       // Decide what to actually execute: NN (DAgger) or greedy
       let execAction = bestAction, execTarget = bestTarget, execFractions = bestFractions;
       if (model) {
-        const pred = model.predict(encodeState(game, playerIdx, {type: "army", army, actionTypeMask: mask, disbandMask}));
+        const pred = model.predict(encodeState(game, rulesOf(game), playerIdx, {type: "army", army, actionTypeMask: mask, disbandMask}));
         execAction = argmax(applyMaskAndSoftmax(pred.actionTypeLogits, mask));
         if (execAction === ACTION_MOVE) {
           const legalMask = moveLegalMask(game, army);
-          const movePred = model.predict(encodeState(game, playerIdx, {type: "moveTarget", army, legalMask}));
+          const movePred = model.predict(encodeState(game, rulesOf(game), playerIdx, {type: "moveTarget", army, legalMask}));
           execTarget = argmax(applyMaskAndSoftmax(movePred.moveTargetLogits, legalMask));
           const moveGroupMask = groupMask(moveGroups(army.getMoveCandidates(NODE_ORDER[execTarget], game.gameMap, game.enemyLocations)));
-          const countPred = model.predict(encodeState(game, playerIdx, {type: "moveCount", army, destinationIdx: execTarget, groupMask: moveGroupMask}));
+          const countPred = model.predict(encodeState(game, rulesOf(game), playerIdx, {type: "moveCount", army, destinationIdx: execTarget, groupMask: moveGroupMask}));
           execFractions = expectedFractions(countPred.moveFractionLogits, NUM_MOVE_GROUPS);
         } else if (execAction === ACTION_DISBAND) {
           execFractions = expectedFractions(pred.disbandFractionLogits, NUM_DISBAND_GROUPS);
@@ -518,7 +518,7 @@ function* lookaheadBattleAllocate(
 
       if (samples) {
         const s = emptySample(playerIdx);
-        s.state = encodeState(game, playerIdx, {
+        s.state = encodeState(game, rulesOf(game), playerIdx, {
           type: "battleAllocate", army, remaining, enemyArmy: target,
           attackProgress: 1 - battle.getRemainingAttacks(army) / battle.maxArmyAttacks, isAttacker, unitsNeeded: killNeeded,
         });
@@ -584,7 +584,7 @@ function* lookaheadBattleLoop(
         if (samples) {
           const remainingAttacks = Math.min(...battle.attackerArmies.map((a) => battle.getRemainingAttacks(a)));
           const s = emptySample(playerIdx);
-          s.state = encodeState(game, playerIdx, {
+          s.state = encodeState(game, rulesOf(game), playerIdx, {
             type: "battleRetreat",
             targetNodeIdx: NODE_ORDER.indexOf(battle.targetLocation),
             attackProgress: 1 - remainingAttacks / battle.maxArmyAttacks,
@@ -670,10 +670,10 @@ function lookaheadSelectArmies(
       const context: DecisionContext = {
         type: "battleSelect", army, targetNodeIdx, selectedPerType, remainingPerType, isDone: false, commitMask: options[i].commitMask,
       };
-      return encodeState(game, playerIdx, context);
+      return encodeState(game, rulesOf(game), playerIdx, context);
     });
     if (doneIdx >= 0) {
-      optionStates.push(encodeState(game, playerIdx, {
+      optionStates.push(encodeState(game, rulesOf(game), playerIdx, {
         type: "battleSelect", army: null, targetNodeIdx, selectedPerType, remainingPerType, isDone: true,
         commitMask: new Float32Array(NUM_COMMIT_GROUPS),
       }));
@@ -740,7 +740,7 @@ function* lookaheadBattlePhase(game: GameSystem, playerIdx: number, samples: Sam
 
     if (samples) {
       const ts = emptySample(playerIdx);
-      ts.state = encodeState(game, playerIdx, {type: "battleTarget", attackableMask});
+      ts.state = encodeState(game, rulesOf(game), playerIdx, {type: "battleTarget", attackableMask});
       ts.battleTargetIdx = labelChoice;
       const m = new Float32Array(BATTLE_TARGET_DIM);
       m.set(attackableMask);
@@ -756,7 +756,7 @@ function* lookaheadBattlePhase(game: GameSystem, playerIdx: number, samples: Sam
       const m = new Float32Array(BATTLE_TARGET_DIM);
       m.set(attackableMask);
       m[BATTLE_TARGET_STOP] = 1;
-      const pred = model.predict(encodeState(game, playerIdx, {type: "battleTarget", attackableMask}));
+      const pred = model.predict(encodeState(game, rulesOf(game), playerIdx, {type: "battleTarget", attackableMask}));
       execChoice = argmax(applyMaskAndSoftmax(pred.battleTargetLogits, m));
     }
     if (execChoice === BATTLE_TARGET_STOP) break;
@@ -803,7 +803,7 @@ function* lookaheadRecruit(game: GameSystem, playerIdx: number, samples: Sample[
 
       if (samples) {
         const s = emptySample(playerIdx);
-        s.state = encodeState(game, playerIdx, {type: "recruit", locationIdx: locIdx, unitType, affordableCount: affordable});
+        s.state = encodeState(game, rulesOf(game), playerIdx, {type: "recruit", locationIdx: locIdx, unitType, affordableCount: affordable});
         s.recruitFraction = bestFrac; s.recruitMask = 1;
         s.value = bestQ;
         samples.push(s);
@@ -811,7 +811,7 @@ function* lookaheadRecruit(game: GameSystem, playerIdx: number, samples: Sample[
 
       // DAgger: NN decides actual fraction
       const execFrac = model
-        ? expectedFractions(model.predict(encodeState(game, playerIdx, {type: "recruit", locationIdx: locIdx, unitType, affordableCount: affordable})).recruitFractionLogits, 1)[0]
+        ? expectedFractions(model.predict(encodeState(game, rulesOf(game), playerIdx, {type: "recruit", locationIdx: locIdx, unitType, affordableCount: affordable})).recruitFractionLogits, 1)[0]
         : bestFrac;
       const count = Math.round(execFrac * affordable);
       if (count > 0 && player.canBuy(unitType, count)) {

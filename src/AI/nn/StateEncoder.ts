@@ -23,9 +23,10 @@
  * Total: 5 + 18 + 21 + 1024 + 292 = 1360 features.
  */
 import type GameSystem from "../../lib/GameSystem";
-import type Army from "../../lib/Army";
-import type Unit from "../../lib/Unit";
-import type Graph from "../../lib/Graph";
+import type {GameData} from "../../lib/GameSystem";
+import type {ArmyData} from "../../lib/Army";
+import type {UnitData} from "../../lib/Unit";
+import type GameAPI from "../../lib/GameAPI";
 import type {DefaultUnitName} from "../../lib/data/DefaultUnitStatsMap.ts";
 import {NODE_ORDER, NUM_NODES, UNIT_TYPES, NUM_UNIT_TYPES} from "./GameIndex";
 import {NUM_UNIT_GROUPS, NUM_MOVE_GROUPS, NUM_COMMIT_GROUPS, NUM_DISBAND_GROUPS, groupCounts} from "./UnitGroups";
@@ -76,20 +77,39 @@ export const MOV_LEGAL_MASK_OFF = ARMY_INFO_FEATURES;
 export const MCNT_GROUP_MASK_OFF = ARMY_INFO_FEATURES + NUM_NODES;
 export const BSEL_COMMIT_MASK_OFF = ARMY_INFO_FEATURES + NUM_NODES + SELECTION_STATE_FEATURES + 1;
 
-// ─── Precomputed distance matrix cache ───
-let cachedDistMatrix: Float32Array | null = null;
-let cachedGraph: Graph | null = null;
+// ─── The rules the encoder asks the game: upkeep and distance ───
 
-function getDistanceMatrix(graph: Graph): Float32Array {
-  if (cachedGraph === graph && cachedDistMatrix) return cachedDistMatrix;
+export type Rules = Pick<GameAPI, "getUpkeep" | "getDistance">;
+
+// Transitional, until every caller holds a GameAPI: the rules of an engine, one object per engine so that the distance matrix cache holds
+const engineRules = new WeakMap<GameSystem, Rules>();
+
+export function rulesOf(game: GameSystem): Rules {
+  let rules = engineRules.get(game);
+  if (!rules) {
+    rules = {
+      getUpkeep: owner => game.getUpkeep(game.allPlayers.find(player => player.name === owner)!),
+      getDistance: (from, to) => game.gameMap.getDistance(from, to),
+    };
+    engineRules.set(game, rules);
+  }
+  return rules;
+}
+
+// ─── Precomputed distance matrix cache, one per rules object ───
+let cachedDistMatrix: Float32Array | null = null;
+let cachedRules: Rules | null = null;
+
+function getDistanceMatrix(rules: Rules): Float32Array {
+  if (cachedRules === rules && cachedDistMatrix) return cachedDistMatrix;
   const mat = new Float32Array(NUM_NODES * NUM_NODES);
   for (let i = 0; i < NUM_NODES; i++) {
     for (let j = 0; j < NUM_NODES; j++) {
-      const d = graph.getDistance(NODE_ORDER[i], NODE_ORDER[j]);
+      const d = rules.getDistance(NODE_ORDER[i], NODE_ORDER[j]);
       mat[i * NUM_NODES + j] = (d === Infinity ? MAX_DISTANCE : d) / MAX_DISTANCE;
     }
   }
-  cachedGraph = graph;
+  cachedRules = rules;
   cachedDistMatrix = mat;
   return mat;
 }
@@ -105,20 +125,20 @@ export interface RecruitContext {
 
 export interface ArmyContext {
   type: "army";
-  army: Army;
+  army: ArmyData;
   actionTypeMask: Float32Array; // [3]
   disbandMask: Float32Array;    // [6] 1 = non-empty disband group
 }
 
 export interface MoveTargetContext {
   type: "moveTarget";
-  army: Army;
+  army: ArmyData;
   legalMask: Float32Array; // [16] 1 = legal destination, choice is softmax over these
 }
 
 export interface MoveCountContext {
   type: "moveCount";
-  army: Army;
+  army: ArmyData;
   destinationIdx: number;
   groupMask: Float32Array; // [4] 1 = move group that can reach the destination
 }
@@ -130,7 +150,7 @@ export interface BattleTargetContext {
 
 export interface BattleSelectContext {
   type: "battleSelect";
-  army: Army | null;          // null for the "done" option
+  army: ArmyData | null;          // null for the "done" option
   targetNodeIdx: number;
   selectedPerType: number[];  // [6] = 3 × (committed units, avgHp)
   remainingPerType: number[]; // [6] = 3 × (attack-ready units of the remaining candidates, avgHp)
@@ -140,9 +160,9 @@ export interface BattleSelectContext {
 
 export interface BattleAllocateContext {
   type: "battleAllocate";
-  army: Army;
+  army: ArmyData;
   remaining: number;
-  enemyArmy: Army;
+  enemyArmy: ArmyData;
   attackProgress: number;
   isAttacker: boolean;
   unitsNeeded: number;
@@ -166,19 +186,19 @@ export type DecisionContext =
 
 // ─── Helper: encode army basics ───
 
-function encodeArmyLocation(buf: Float32Array, offset: number, army: Army): number {
+function encodeArmyLocation(buf: Float32Array, offset: number, army: ArmyData): number {
   const locIdx = NODE_ORDER.indexOf(army.location);
   if (locIdx >= 0) buf[offset + locIdx] = 1;
   return offset + 16;
 }
 
-function encodeArmyType(buf: Float32Array, offset: number, army: Army): number {
+function encodeArmyType(buf: Float32Array, offset: number, army: ArmyData): number {
   const typeIdx = (UNIT_TYPES as readonly string[]).indexOf(army.unitType);
   if (typeIdx >= 0) buf[offset + typeIdx] = 1;
   return offset + 3;
 }
 
-function encodeUnitsHp(units: Unit[]): number {
+function encodeUnitsHp(units: UnitData[]): number {
   if (units.length === 0) return 0;
   let sum = 0;
   for (const u of units) sum += u.currentHealth / u.health;
@@ -186,10 +206,10 @@ function encodeUnitsHp(units: Unit[]): number {
 }
 
 /** Army info (27): location(16) + type(3) + units + avgHp + units per group(6). */
-function encodeArmyInfo(buf: Float32Array, offset: number, game: GameSystem, army: Army): number {
+function encodeArmyInfo(buf: Float32Array, offset: number, state: GameData, army: ArmyData): number {
   offset = encodeArmyLocation(buf, offset, army);
   offset = encodeArmyType(buf, offset, army);
-  const armyCost = game.unitStatsMap[army.unitType].cost;
+  const armyCost = state.unitStatsMap[army.unitType].cost;
   buf[offset++] = army.units.length / (100 / armyCost);
   buf[offset++] = encodeUnitsHp(army.units);
   const counts = groupCounts(army.units);
@@ -198,7 +218,7 @@ function encodeArmyInfo(buf: Float32Array, offset: number, game: GameSystem, arm
 }
 
 /** Per unit type, the unit count and average health ratio of the given (army, units) entries: [units, avgHp] × 3. */
-export function perTypeState(entries: Iterable<readonly [Army, Unit[]]>): number[] {
+export function perTypeState(entries: Iterable<readonly [ArmyData, UnitData[]]>): number[] {
   const state = new Array<number>(NUM_UNIT_TYPES * 2).fill(0);
   const hpSums = new Array<number>(NUM_UNIT_TYPES).fill(0);
   for (const [army, units] of entries) {
@@ -216,31 +236,32 @@ export function perTypeState(entries: Iterable<readonly [Army, Unit[]]>): number
 // ─── Main encoder ───
 
 export function encodeState(
-  game: GameSystem,
+  state: GameData,
+  rules: Rules,
   playerIdx: number,
   context?: DecisionContext,
 ): Float32Array {
   const buf = new Float32Array(STATE_SIZE);
   let offset = 0;
 
-  const self = game.players[playerIdx];
-  const opponents = game.players.filter((_, i) => i !== playerIdx);
+  const self = state.players[playerIdx];
+  const opponents = state.players.filter((_, i) => i !== playerIdx);
   const perspPlayers = [self, opponents[0], opponents[1]];
-  const neutral = game.neutralPlayer;
+  const neutral = state.neutralPlayer;
   const allFactions = [self, opponents[0], opponents[1], neutral];
 
-  const distMatrix = getDistanceMatrix(game.gameMap);
+  const distMatrix = getDistanceMatrix(rules);
 
   // ─── 1. Game config (5) ───
-  buf[offset++] = game.interestRate / 0.10;
-  buf[offset++] = game.upkeepRate / 0.20;
-  buf[offset++] = game.turnCount / 100;
-  buf[offset++] = game.maxTurns / 100;
-  buf[offset++] = game.maxArmyAttacks / 20;
+  buf[offset++] = state.interestRate / 0.10;
+  buf[offset++] = state.upkeepRate / 0.20;
+  buf[offset++] = state.turnCount / 100;
+  buf[offset++] = state.maxTurns / 100;
+  buf[offset++] = state.maxArmyAttacks / 20;
 
   // ─── 2. Unit type stats (3 × 6 = 18) ───
   for (const typeName of UNIT_TYPES) {
-    const stats = game.unitStatsMap[typeName];
+    const stats = state.unitStatsMap[typeName];
     buf[offset++] = stats.attack / 9;
     buf[offset++] = stats.defend / 3;
     buf[offset++] = stats.health / 20;
@@ -256,22 +277,22 @@ export function encodeState(
     buf[offset++] = p.money / 200;
 
     let nodeIncome = 0;
-    for (const [node, nodeOwner] of game.nodeOwnership) {
-      if (nodeOwner === p) {
-        nodeIncome += game.gameMap.getNodeData(node).income;
+    for (const [node, {data}] of state.gameMap.nodes) {
+      if (state.nodeOwnership.get(node) === p) {
+        nodeIncome += data.income;
       }
     }
     buf[offset++] = nodeIncome / 68;
 
-    buf[offset++] = (p.money * game.interestRate) / 10;
+    buf[offset++] = (p.money * state.interestRate) / 10;
 
-    buf[offset++] = game.getUpkeep(p) / 20;
+    buf[offset++] = rules.getUpkeep(p.name) / 20;
 
     const totalUnits = p.armies.reduce((sum, a) => sum + a.units.length, 0);
     buf[offset++] = totalUnits / 200;
 
     let nodeCount = 0;
-    for (const [, nodeOwner] of game.nodeOwnership) {
+    for (const [, nodeOwner] of state.nodeOwnership) {
       if (nodeOwner === p) nodeCount++;
     }
     buf[offset++] = nodeCount / 16;
@@ -282,8 +303,8 @@ export function encodeState(
   // ─── 4. Per-node features (16 × 64 = 1024) ───
   for (let ni = 0; ni < NUM_NODES; ni++) {
     const nodeName = NODE_ORDER[ni];
-    const owner = game.nodeOwnership.get(nodeName) ?? null;
-    const nodeData = game.gameMap.getNodeData(nodeName);
+    const owner = state.nodeOwnership.get(nodeName) ?? null;
+    const nodeData = state.gameMap.nodes.get(nodeName)!.data;
 
     buf[offset++] = nodeData.income / 10;
     buf[offset++] = nodeData.canRecruit ? 1 : 0;
@@ -313,7 +334,7 @@ export function encodeState(
             }
           }
         }
-        const unitCost = game.unitStatsMap[UNIT_TYPES[t]].cost;
+        const unitCost = state.unitStatsMap[UNIT_TYPES[t]].cost;
         buf[offset++] = unitCount / (100 / unitCost);
         buf[offset++] = hpCount > 0 ? hpSum / hpCount : 0;
       }
@@ -321,8 +342,8 @@ export function encodeState(
 
     // Own units per (remaining moves, can attack) group, per type
     for (let t = 0; t < NUM_UNIT_TYPES; t++) {
-      const army = self.getArmy(nodeName, UNIT_TYPES[t]);
-      const unitCost = game.unitStatsMap[UNIT_TYPES[t]].cost;
+      const army = self.armies.find(army => army.location === nodeName && army.unitType === UNIT_TYPES[t]);
+      const unitCost = state.unitStatsMap[UNIT_TYPES[t]].cost;
       const counts = army ? groupCounts(army.units) : new Array<number>(NUM_UNIT_GROUPS).fill(0);
       for (let g = 0; g < NUM_UNIT_GROUPS; g++) buf[offset++] = counts[g] / (100 / unitCost);
     }
@@ -350,7 +371,7 @@ export function encodeState(
     const typeIdx = UNIT_TYPES.indexOf(context.unitType);
     if (typeIdx >= 0) buf[offset + typeIdx] = 1;
     offset += 3;
-    const recruitCost = game.unitStatsMap[context.unitType].cost;
+    const recruitCost = state.unitStatsMap[context.unitType].cost;
     buf[offset++] = context.affordableCount / (200 / recruitCost);
   } else {
     offset += RECRUIT_CONTEXT;
@@ -358,7 +379,7 @@ export function encodeState(
 
   // ── army (36): armyInfo(27) + actionTypeMask[3] + disbandMask[6] ──
   if (context?.type === "army") {
-    offset = encodeArmyInfo(buf, offset, game, context.army);
+    offset = encodeArmyInfo(buf, offset, state, context.army);
     for (let i = 0; i < NUM_ACTION_TYPES; i++) buf[offset++] = context.actionTypeMask[i];
     for (let i = 0; i < NUM_DISBAND_GROUPS; i++) buf[offset++] = context.disbandMask[i];
   } else {
@@ -367,7 +388,7 @@ export function encodeState(
 
   // ── moveTarget (43): armyInfo(27) + legalDestinationMask[16] ──
   if (context?.type === "moveTarget") {
-    offset = encodeArmyInfo(buf, offset, game, context.army);
+    offset = encodeArmyInfo(buf, offset, state, context.army);
     for (let i = 0; i < NUM_NODES; i++) {
       buf[offset + i] = context.legalMask[i] > 0 ? 1 : 0;
     }
@@ -378,7 +399,7 @@ export function encodeState(
 
   // ── moveCount (47): armyInfo(27) + destination[16] + moveGroupMask[4] ──
   if (context?.type === "moveCount") {
-    offset = encodeArmyInfo(buf, offset, game, context.army);
+    offset = encodeArmyInfo(buf, offset, state, context.army);
     if (context.destinationIdx >= 0 && context.destinationIdx < NUM_NODES) {
       buf[offset + context.destinationIdx] = 1;
     }
@@ -402,7 +423,7 @@ export function encodeState(
   if (context?.type === "battleSelect") {
     const army = context.army;
     if (army) {
-      offset = encodeArmyInfo(buf, offset, game, army);
+      offset = encodeArmyInfo(buf, offset, state, army);
     } else {
       offset += ARMY_INFO_FEATURES; // "done" option: army fields all zero
     }
@@ -411,12 +432,12 @@ export function encodeState(
     }
     offset += 16;
     for (let t = 0; t < NUM_UNIT_TYPES; t++) {
-      const typeCost = game.unitStatsMap[UNIT_TYPES[t]].cost;
+      const typeCost = state.unitStatsMap[UNIT_TYPES[t]].cost;
       buf[offset++] = context.selectedPerType[t * 2] / (100 / typeCost);
       buf[offset++] = context.selectedPerType[t * 2 + 1];
     }
     for (let t = 0; t < NUM_UNIT_TYPES; t++) {
-      const typeCost = game.unitStatsMap[UNIT_TYPES[t]].cost;
+      const typeCost = state.unitStatsMap[UNIT_TYPES[t]].cost;
       buf[offset++] = context.remainingPerType[t * 2] / (100 / typeCost);
       buf[offset++] = context.remainingPerType[t * 2 + 1];
     }
@@ -432,16 +453,16 @@ export function encodeState(
     const army = context.army;
     offset = encodeArmyLocation(buf, offset, army);
     offset = encodeArmyType(buf, offset, army);
-    const armyCost = game.unitStatsMap[army.unitType].cost;
-    const battleUnits = army.battleUnits;
+    const armyCost = state.unitStatsMap[army.unitType].cost;
+    const battleUnits = army.units.filter(unit => unit.inBattle);
     buf[offset++] = battleUnits.length / (100 / armyCost);
     buf[offset++] = context.remaining / (100 / armyCost);
     buf[offset++] = encodeUnitsHp(battleUnits);
     const enemy = context.enemyArmy;
     offset = encodeArmyLocation(buf, offset, enemy);
     offset = encodeArmyType(buf, offset, enemy);
-    const enemyCost = game.unitStatsMap[enemy.unitType].cost;
-    const enemyUnits = enemy.battleUnits;
+    const enemyCost = state.unitStatsMap[enemy.unitType].cost;
+    const enemyUnits = enemy.units.filter(unit => unit.inBattle);
     buf[offset++] = enemyUnits.length / (100 / enemyCost);
     buf[offset++] = encodeUnitsHp(enemyUnits);
     buf[offset++] = context.attackProgress;

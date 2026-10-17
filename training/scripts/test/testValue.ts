@@ -14,7 +14,7 @@ import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import type {TurnOptions, DecisionInfo} from "../../../src/AI/TurnExecutor";
 import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
-import {encodeState} from "../../../src/AI/nn/StateEncoder";
+import {encodeState, rulesOf} from "../../../src/AI/nn/StateEncoder";
 import {randomTurn} from "../../src/Opponents";
 import {terminalValue, DRAW_VALUE} from "../../src/SampleTypes";
 import {MODEL_DIR_PHASE1, MODEL_DIR_PHASE2, MAX_TURNS} from "../../src/trainUtils";
@@ -51,7 +51,7 @@ async function evaluateValueHead(label: string, modelDir: string) {
         // Also predict from other 2 players' perspectives
         for (let pi = 0; pi < 3; pi++) {
           if (pi === nnIdx) continue;
-          const state = encodeState(game, pi);
+          const state = encodeState(game, rulesOf(game), pi);
           const pred = model.predict(state);
           perPlayerRecords.push({
             turnCount: game.turnCount,

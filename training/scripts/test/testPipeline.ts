@@ -19,7 +19,7 @@ import {nnVsRandomGame, recordsToSamples, snapshotsToValueSamples, assignAdvanta
 import {
   GAME_KIND, datasetPath, createTrajectoryWriter, writeManifest, materializeSamples,
 } from "../../src/TrajectoryStore";
-import {encodeState, STATE_SIZE} from "../../../src/AI/nn/StateEncoder";
+import {encodeState, rulesOf, STATE_SIZE} from "../../../src/AI/nn/StateEncoder";
 import type {Sample} from "../../src/SampleTypes";
 import {sampleToFloats, emptySample, SAMPLE_FLOATS} from "../../src/SampleTypes";
 import {
@@ -102,7 +102,7 @@ async function main() {
       const result = nnVsRandomGame(game, model, g % 3, 12, 1.0, 0.2);
       const winner = game.winner;
       const winnerIdx = winner ? game.players.findIndex(p => p.name === winner.name) : -1;
-      const terminalStates = [0, 1, 2].map(pi => encodeState(game, pi));
+      const terminalStates = [0, 1, 2].map(pi => encodeState(game, rulesOf(game), pi));
       writer.writeGame(
         {kind: GAME_KIND.vsRandom, nnIdx: g % 3, opponentId: 0, winnerIdx, turnCount: game.turnCount},
         result, terminalStates,

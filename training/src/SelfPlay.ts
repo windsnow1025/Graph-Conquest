@@ -20,7 +20,7 @@ import {NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS} from "../../src/
 import {NUM_NODES} from "../../src/AI/nn/GameIndex";
 import {
   encodeState, CTX_BASE, CTX_ARMY_OFF, CTX_MOV_OFF, CTX_MCNT_OFF, CTX_BTGT_OFF, CTX_BSEL_OFF,
-  ARMY_ACTION_MASK_OFF, ARMY_DISBAND_MASK_OFF, MOV_LEGAL_MASK_OFF, MCNT_GROUP_MASK_OFF, BSEL_COMMIT_MASK_OFF,
+  ARMY_ACTION_MASK_OFF, ARMY_DISBAND_MASK_OFF, MOV_LEGAL_MASK_OFF, MCNT_GROUP_MASK_OFF, BSEL_COMMIT_MASK_OFF, rulesOf,
 } from "../../src/AI/nn/StateEncoder";
 import type {Sample} from "./SampleTypes";
 import {emptySample, terminalValue} from "./SampleTypes";
@@ -78,7 +78,7 @@ function makeRecordingOpts(records: RawRecord[], temperature: number, epsilon: n
 
 function takeSnapshot(game: GameSystem, model: NNModel, records: RawRecord[], snapshots: TurnSnapshot[]): void {
   const playerIdx = game.currentPlayerIndex;
-  const state = encodeState(game, playerIdx);
+  const state = encodeState(game, rulesOf(game), playerIdx);
   // fround: keep advantages bit-identical whether trajectories are consumed
   // in memory or after an f32 round-trip through the trajectory store
   snapshots.push({playerIdx, state, v: Math.fround(model.predict(state).value), recordFrom: records.length});

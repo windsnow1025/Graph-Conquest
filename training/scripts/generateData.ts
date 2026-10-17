@@ -35,7 +35,7 @@ import {setupBackend} from "../src/setupBackend";
 import {NNModel} from "../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../src/nodeIO";
 import GameSystem from "../../src/lib/GameSystem";
-import {encodeState} from "../../src/AI/nn/StateEncoder";
+import {encodeState, rulesOf, STATE_SIZE} from "../../src/AI/nn/StateEncoder";
 import {executeNNTurn} from "../../src/AI/TurnExecutor";
 import {passiveTurn, randomTurn} from "../src/Opponents";
 import {greedyTurn, daggerTurn, scorePlayer} from "../src/GreedyAI";
@@ -171,7 +171,7 @@ async function generateVsRandom(name: string, dir: string, opts: Map<string, str
     params: {games, temperature, epsilon, maxTurns: MAX_TURNS},
     model: {name: modelName, weightsMd5: weightsMd5(modelDir)},
     opponents: [{name: "random"}],
-    stateDim: encodeState(createRandomizedGame(), 0).length,
+    stateDim: STATE_SIZE,
     stats: {games: w.games, records: w.records, snapshots: w.snapshots, ...finishStats(stats, w.games)},
   };
 }
@@ -232,7 +232,7 @@ async function generateMixed(name: string, dir: string, opts: Map<string, string
     params: {gamesOpp, gamesSelf, temperature, epsilon, maxTurns: MAX_TURNS},
     model: {name: modelName, weightsMd5: weightsMd5(modelDir)},
     opponents: opponents.map(o => (o.weightsMd5 ? {name: o.name, weightsMd5: o.weightsMd5} : {name: o.name})),
-    stateDim: encodeState(createRandomizedGame(), 0).length,
+    stateDim: STATE_SIZE,
     stats: {games: w.games, records: w.records, snapshots: w.snapshots, ...finishStats(stats, w.games)},
   };
 }
@@ -241,7 +241,7 @@ function writeGameFrame(
   writer: ReturnType<typeof createTrajectoryWriter>, game: GameSystem, result: GameResult,
   meta: Omit<PersistedGameMeta, "winnerIdx" | "turnCount">,
 ): void {
-  const terminalStates = [0, 1, 2].map(pi => encodeState(game, pi));
+  const terminalStates = [0, 1, 2].map(pi => encodeState(game, rulesOf(game), pi));
   writer.writeGame({...meta, winnerIdx: winnerIndex(game), turnCount: game.turnCount}, result, terminalStates);
 }
 
@@ -299,7 +299,7 @@ async function generateImitation(name: string, dir: string, opts: Map<string, st
     }
     for (let pi = 0; pi < 3; pi++) {
       const vs = emptySample(pi);
-      vs.state = encodeState(game, pi);
+      vs.state = encodeState(game, rulesOf(game), pi);
       vs.value = terminalValue(winner, game.players[pi]);
       gameSamples.push(vs);
     }
@@ -317,7 +317,7 @@ async function generateImitation(name: string, dir: string, opts: Map<string, st
     params: {...counts, maxTurns: MAX_TURNS},
     model: daggerModelName && dagger ? {name: daggerModelName, weightsMd5: weightsMd5(dagger.dir)} : null,
     opponents: [{name: "passive"}, {name: "random"}, {name: "greedy"}],
-    stateDim: encodeState(createRandomizedGame(), 0).length,
+    stateDim: STATE_SIZE,
     stats: {games: schedule.length, records: 0, snapshots: 0, samples, ...finishStats(stats, schedule.length)},
   };
 }
@@ -363,7 +363,7 @@ async function generateStalemate(name: string, dir: string, opts: Map<string, st
     }
     for (let pi = 0; pi < 3; pi++) {
       const vs = emptySample(pi);
-      vs.state = encodeState(game, pi);
+      vs.state = encodeState(game, rulesOf(game), pi);
       vs.value = terminalValue(winner, game.players[pi]);
       gameSamples.push(vs);
     }
@@ -383,7 +383,7 @@ async function generateStalemate(name: string, dir: string, opts: Map<string, st
     params: {games, from, label, played, maxTurns: MAX_TURNS},
     model: {name: modelName, weightsMd5: weightsMd5(modelDir)},
     opponents: [{name: "random"}, {name: "greedy"}],
-    stateDim: encodeState(createRandomizedGame(), 0).length,
+    stateDim: STATE_SIZE,
     stats: {games, records: 0, snapshots: 0, samples, ...finishStats(stats, games)},
   };
 }
