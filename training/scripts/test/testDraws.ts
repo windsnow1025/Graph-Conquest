@@ -14,6 +14,7 @@ import type {DecisionInfo, TurnOptions} from "../../../src/AI/TurnExecutor";
 import {ACTION_NAMES} from "../../../src/AI/nn/ActionSpace";
 import {BATTLE_TARGET_STOP} from "../../../src/AI/nn/NNModel";
 import {randomTurn} from "../../src/Opponents";
+import GameAPI from "../../../src/lib/GameAPI";
 import {MAX_TURNS, MODEL_DIR_PHASE1, countNodes, createRandomizedGame} from "../../src/trainUtils";
 import type GameSystem from "../../../src/lib/GameSystem";
 import * as path from "path";
@@ -79,7 +80,7 @@ async function main() {
         history.push(current);
         current = null;
       } else {
-        randomTurn(game);
+        randomTurn(GameAPI.of(game));
       }
     }
 

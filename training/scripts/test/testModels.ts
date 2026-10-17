@@ -10,6 +10,7 @@ import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {scorePlayer} from "../../src/GreedyAI";
 import {randomTurn} from "../../src/Opponents";
+import GameAPI from "../../../src/lib/GameAPI";
 import {MODEL_DIR_PHASE1, MODEL_DIR_PHASE2, MODEL_DIR_PHASE3, MAX_TURNS, createRandomizedGame} from "../../src/trainUtils";
 
 const VS_RANDOM_GAMES = 30;
@@ -25,7 +26,7 @@ async function testVsRandom(label: string, model: NNModel) {
     const nnIdx = g % 3;
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
       if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model);
-      else randomTurn(game);
+      else randomTurn(GameAPI.of(game));
     }
     const winner = game.winner?.name ?? "draw";
     const nnName = ["Blue", "Red", "Green"][nnIdx];

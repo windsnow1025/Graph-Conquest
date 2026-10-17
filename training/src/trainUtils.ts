@@ -10,6 +10,7 @@ import type {GameConfig} from "../../src/lib/Config";
 import {UNIT_TYPES} from "../../src/AI/nn/GameIndex";
 import {executeNNTurn} from "../../src/AI/TurnExecutor";
 import {randomTurn} from "./Opponents";
+import GameAPI from "../../src/lib/GameAPI";
 import {scorePlayer} from "./GreedyAI";
 import type {Sample} from "./SampleTypes";
 import {SAMPLE_FLOATS, sampleToFloats} from "./SampleTypes";
@@ -278,7 +279,7 @@ export async function testNNvsRandom(modelDir: string, games: number = TEST_GAME
     const nnIdx = g % 3;
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
       if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, testModel);
-      else randomTurn(game);
+      else randomTurn(GameAPI.of(game));
     }
     const scores = [0, 1, 2].map(i => scorePlayer(game, i));
     const units = game.players.map(p => p.armies.reduce((s, a) => s + a.units.length, 0));

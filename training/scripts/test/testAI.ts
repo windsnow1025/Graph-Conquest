@@ -12,6 +12,7 @@ import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {randomTurn} from "../../src/Opponents";
+import GameAPI from "../../../src/lib/GameAPI";
 import * as path from "path";
 
 function parseArgs(): {numGames: number; maxTurns: number} {
@@ -56,7 +57,7 @@ async function runGame(model: NNModel, maxTurns: number, gameIndex: number): Pro
     if (player.name === "Blue") {
       executeNNTurn(game, model);
     } else {
-      randomTurn(game);
+      randomTurn(GameAPI.of(game));
     }
 
     // Print state after each player's turn (every 3rd turn = 1 round)

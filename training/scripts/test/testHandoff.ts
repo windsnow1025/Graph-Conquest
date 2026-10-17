@@ -12,6 +12,7 @@ import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {greedyTurn} from "../../src/GreedyAI";
 import {randomTurn} from "../../src/Opponents";
+import GameAPI from "../../../src/lib/GameAPI";
 import {MAX_TURNS, MODEL_DIR_PHASE1, countNodes, createRandomizedGame} from "../../src/trainUtils";
 import * as path from "path";
 
@@ -32,7 +33,7 @@ async function main() {
     let handedOff = false;
     const t0 = Date.now();
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex !== nnIdx) { randomTurn(game); continue; }
+      if (game.currentPlayerIndex !== nnIdx) { randomTurn(GameAPI.of(game)); continue; }
       if (!handedOff && game.turnCount >= handoffTurn) {
         handedOff = true;
         handoffs++;

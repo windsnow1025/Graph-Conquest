@@ -16,6 +16,7 @@ import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {encodeState, rulesOf} from "../../../src/AI/nn/StateEncoder";
 import {randomTurn} from "../../src/Opponents";
+import GameAPI from "../../../src/lib/GameAPI";
 import {terminalValue, DRAW_VALUE} from "../../src/SampleTypes";
 import {MODEL_DIR_PHASE1, MODEL_DIR_PHASE2, MAX_TURNS} from "../../src/trainUtils";
 
@@ -64,7 +65,7 @@ async function evaluateValueHead(label: string, modelDir: string) {
 
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
       if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model, opts);
-      else randomTurn(game);
+      else randomTurn(GameAPI.of(game));
     }
 
     const winner = game.winner?.name ?? "draw";

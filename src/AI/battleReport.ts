@@ -1,18 +1,18 @@
 /**
  * Battle diagnostics for the stuck-loop guards in the decision loops.
- * Reads only public Battle state; src/lib stays untouched.
+ * Reads the battle's data.
  */
-import type Battle from "../lib/Battle";
-import type Army from "../lib/Army";
+import type {BattleData} from "../lib/Battle";
+import type {ArmyData} from "../lib/Army";
 
-export function battleStuckReport(context: string, battle: Battle): string {
-  const fmt = (armies: Army[]) => armies.map(a =>
-    `${a.unitType}(${a.battleUnits.length}/${a.units.length}u@${a.location} rng=${a.unitStats.range} attacks=${battle.getRemainingAttacks(a)}/${battle.maxArmyAttacks})`
+export function battleStuckReport(context: string, battle: BattleData): string {
+  const fmt = (armies: ArmyData[]) => armies.map(a =>
+    `${a.unitType}(${a.units.filter(unit => unit.inBattle).length}/${a.units.length}u@${a.location} rng=${a.unitStats.range} attacks=${battle.remainingAttacks.get(a)}/${battle.maxArmyAttacks})`
   ).join(", ") || "(none)";
   return [
     `${context}: loc=${battle.targetLocation} round=${battle.round} phase=${battle.phase} result=${battle.result}`,
     `  atk: ${fmt(battle.attackerArmies)}`,
     `  def: ${fmt(battle.defenderArmies)}`,
-    `  hasActable=${battle.hasActableArmies} acted=${battle.actedArmies.size}`,
+    `  acted=${battle.actedArmies.size}`,
   ].join("\n");
 }

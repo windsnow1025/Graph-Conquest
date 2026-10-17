@@ -348,7 +348,7 @@ async function main() {
   for (let g = 0; g < RANDOM_GAMES; g++) {
     const game = createRandomizedGame();
     watch(game);
-    while (!game.gameOver) randomTurn(game);
+    while (!game.gameOver) randomTurn(GameAPI.of(game));
   }
   console.log(`random games: ${JSON.stringify(stats)}`);
 
@@ -357,7 +357,7 @@ async function main() {
     watch(game);
     while (!game.gameOver) {
       if (game.currentPlayerIndex === g % 3) greedyTurn(game);
-      else randomTurn(game);
+      else randomTurn(GameAPI.of(game));
     }
   }
   console.log(`greedy games: ${JSON.stringify(stats)}`);

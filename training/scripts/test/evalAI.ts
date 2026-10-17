@@ -20,6 +20,7 @@ import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {passiveTurn, randomTurn} from "../../src/Opponents";
+import GameAPI from "../../../src/lib/GameAPI";
 import * as path from "path";
 
 // ─── Types ───
@@ -89,8 +90,8 @@ function runGame(
       executeNNTurn(game, model);
     } else {
       switch (opponentType) {
-        case "random": randomTurn(game); break;
-        case "passive": passiveTurn(game); break;
+        case "random": randomTurn(GameAPI.of(game)); break;
+        case "passive": passiveTurn(GameAPI.of(game)); break;
       }
     }
   }

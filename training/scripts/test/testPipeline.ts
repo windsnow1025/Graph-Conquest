@@ -15,6 +15,7 @@ import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {greedyTurn, daggerTurn} from "../../src/GreedyAI";
 import {randomTurn} from "../../src/Opponents";
+import GameAPI from "../../../src/lib/GameAPI";
 import {nnVsRandomGame, recordsToSamples, snapshotsToValueSamples, assignAdvantages} from "../../src/SelfPlay";
 import {
   GAME_KIND, datasetPath, createTrajectoryWriter, writeManifest, materializeSamples,
@@ -154,7 +155,7 @@ async function main() {
     const samples: Sample[] = [];
     for (let t = 0; t < 9 && !game.gameOver; t++) {
       if (game.currentPlayerIndex === 0) greedyTurn(game, samples);
-      else randomTurn(game);
+      else randomTurn(GameAPI.of(game));
     }
     validateSamples(samples, "Greedy");
     assert(samples.some(s => s.moveTargetIdx >= 0), "greedy produced no moveTarget samples");
@@ -168,7 +169,7 @@ async function main() {
     const samples: Sample[] = [];
     for (let t = 0; t < 6 && !game.gameOver; t++) {
       if (game.currentPlayerIndex === 0) daggerTurn(game, model, samples);
-      else randomTurn(game);
+      else randomTurn(GameAPI.of(game));
     }
     validateSamples(samples, "DAgger");
     allSamples.push(...samples);
@@ -194,7 +195,7 @@ async function main() {
   const game = createRandomizedGame();
   for (let turn = 0; turn < 40 * 3 && !game.gameOver; turn++) {
     if (game.currentPlayerIndex === 0) executeNNTurn(game, m2);
-    else randomTurn(game);
+    else randomTurn(GameAPI.of(game));
   }
   log(`  Game finished: winner=${game.winner?.name ?? "none (turn cap)"} T${game.turnCount}`);
 

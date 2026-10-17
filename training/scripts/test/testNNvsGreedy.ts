@@ -9,6 +9,7 @@ import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {randomTurn} from "../../src/Opponents";
+import GameAPI from "../../../src/lib/GameAPI";
 import {greedyTurn, scorePlayer} from "../../src/GreedyAI";
 import {MAX_TURNS, countNodes} from "../../src/trainUtils";
 
@@ -33,7 +34,7 @@ async function main() {
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
       if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model);
       else if (game.currentPlayerIndex === greedyIdx) greedyTurn(game);
-      else randomTurn(game);
+      else randomTurn(GameAPI.of(game));
     }
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);

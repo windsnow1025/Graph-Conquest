@@ -9,6 +9,7 @@ import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {randomTurn} from "../../src/Opponents";
+import GameAPI from "../../../src/lib/GameAPI";
 import {scorePlayer} from "../../src/GreedyAI";
 import {MAX_TURNS, countNodes} from "../../src/trainUtils";
 
@@ -28,7 +29,7 @@ async function main() {
     const nnIdx = g % 3;
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
       if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model);
-      else randomTurn(game);
+      else randomTurn(GameAPI.of(game));
     }
     const scores = [0, 1, 2].map(i => scorePlayer(game, i));
     const nodes = game.players.map(p => countNodes(game, p));

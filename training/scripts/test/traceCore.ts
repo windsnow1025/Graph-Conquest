@@ -16,6 +16,7 @@ import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {randomTurn} from "../../src/Opponents";
+import GameAPI from "../../../src/lib/GameAPI";
 import {greedyTurn} from "../../src/GreedyAI";
 import {createRandomizedGame, seededRandom} from "../../src/trainUtils";
 import * as crypto from "crypto";
@@ -44,7 +45,7 @@ async function main() {
     const game = createRandomizedGame();
     while (!game.gameOver) {
       const turn = game.turnCount, playerIdx = game.currentPlayerIndex;
-      randomTurn(game);
+      randomTurn(GameAPI.of(game));
       console.log(turnLine(`R${g}`, game, turn, playerIdx));
     }
     console.log(endLine(`R${g}`, game));
@@ -56,7 +57,7 @@ async function main() {
     while (!game.gameOver) {
       const turn = game.turnCount, playerIdx = game.currentPlayerIndex;
       if (playerIdx === greedyIdx) greedyTurn(game);
-      else randomTurn(game);
+      else randomTurn(GameAPI.of(game));
       console.log(turnLine(`G${g}`, game, turn, playerIdx));
     }
     console.log(endLine(`G${g}`, game));

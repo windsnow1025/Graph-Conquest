@@ -38,6 +38,7 @@ import GameSystem from "../../src/lib/GameSystem";
 import {encodeState, rulesOf, STATE_SIZE} from "../../src/AI/nn/StateEncoder";
 import {executeNNTurn} from "../../src/AI/TurnExecutor";
 import {passiveTurn, randomTurn} from "../src/Opponents";
+import GameAPI from "../../src/lib/GameAPI";
 import {greedyTurn, daggerTurn, scorePlayer} from "../src/GreedyAI";
 import {emptySample, terminalValue} from "../src/SampleTypes";
 import type {Sample} from "../src/SampleTypes";
@@ -190,7 +191,7 @@ async function generateMixed(name: string, dir: string, opts: Map<string, string
   const {model: phase2Opp, dir: phase2Dir} = await loadModel("phase2");
 
   const opponents: {name: string; fn: OpponentFn; weightsMd5?: string}[] = [
-    {name: "passive", fn: passiveTurn},
+    {name: "passive", fn: (game) => passiveTurn(GameAPI.of(game))},
     {name: "phase1", fn: (game) => executeNNTurn(game, phase1Opp), weightsMd5: weightsMd5(phase1Dir)},
     {name: "phase2", fn: (game) => executeNNTurn(game, phase2Opp), weightsMd5: weightsMd5(phase2Dir)},
   ];
@@ -279,14 +280,14 @@ async function generateImitation(name: string, dir: string, opts: Map<string, st
     const playTurn = (): void => {
       if (opType === "dagger") {
         if (game.currentPlayerIndex === greedyIdx) daggerTurn(game, daggerModel, gameSamples);
-        else randomTurn(game);
+        else randomTurn(GameAPI.of(game));
       } else if (opType === "greedy") {
         if (game.currentPlayerIndex === greedyIdx) greedyTurn(game, gameSamples);
         else greedyTurn(game);
       } else {
         if (game.currentPlayerIndex === greedyIdx) greedyTurn(game, gameSamples);
-        else if (opType === "passive") passiveTurn(game);
-        else randomTurn(game);
+        else if (opType === "passive") passiveTurn(GameAPI.of(game));
+        else randomTurn(GameAPI.of(game));
       }
     };
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) playTurn();
@@ -342,7 +343,7 @@ async function generateStalemate(name: string, dir: string, opts: Map<string, st
     const t0 = Date.now();
     while (!game.gameOver && game.turnCount < from) {
       if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model);
-      else randomTurn(game);
+      else randomTurn(GameAPI.of(game));
     }
     if (game.gameOver) continue;
 
@@ -350,11 +351,11 @@ async function generateStalemate(name: string, dir: string, opts: Map<string, st
     let labeled = 0;
     while (!game.gameOver && labeled < label) {
       if (game.currentPlayerIndex === nnIdx) { daggerTurn(game, model, gameSamples); labeled++; }
-      else randomTurn(game);
+      else randomTurn(GameAPI.of(game));
     }
     while (!game.gameOver) {
       if (game.currentPlayerIndex === nnIdx) greedyTurn(game);
-      else randomTurn(game);
+      else randomTurn(GameAPI.of(game));
     }
 
     const winner = game.winner?.name ?? "draw";

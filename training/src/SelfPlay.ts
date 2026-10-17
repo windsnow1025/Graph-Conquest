@@ -25,6 +25,7 @@ import {
 import type {Sample} from "./SampleTypes";
 import {emptySample, terminalValue} from "./SampleTypes";
 import {randomTurn} from "./Opponents";
+import GameAPI from "../../src/lib/GameAPI";
 import type GameSystem from "../../src/lib/GameSystem";
 
 export interface RawRecord {
@@ -147,7 +148,7 @@ export function nnVsRandomGame(
     if (game.currentPlayerIndex === nnIdx) {
       executeNNTurn(game, model, opts);
     } else {
-      randomTurn(game);
+      randomTurn(GameAPI.of(game));
     }
   }
 
