@@ -72,6 +72,11 @@ function idOf(game: GameSystem, army: Army): ArmyId {
   return {owner: owner.name, location: army.location, unitType: army.unitType};
 }
 
+/** The army of the current player that holds the units a consumer moves or disbands. */
+function armyOf(game: GameSystem, units: Unit[]): Army {
+  return game.currentPlayer.getArmyOf(units[0])!;
+}
+
 /** The unit list a consumer passes to the engine, as one state and count per state, in order of first appearance. */
 function selectionOf(units: Unit[]): UnitSelection[] {
   const entries = new Map<string, UnitSelection>();
@@ -231,15 +236,15 @@ function watch(game: GameSystem): void {
   const end = game.endTurn.bind(game);
   game.recruitPlayerArmy = (unitType, location, count) =>
     mirror(game, "recruit", api => api.recruit(unitType, location, count), () => recruit(unitType, location, count), army => army !== null);
-  game.movePlayerUnits = (army, location, units) => {
-    const id = idOf(game, army);
+  game.movePlayerUnits = (units, location) => {
+    const id = idOf(game, armyOf(game, units));
     const selection = selectionOf(units);
-    return mirror(game, "moveUnits", api => api.moveUnits(id, location, selection), () => move(army, location, units), verdict => verdict);
+    return mirror(game, "moveUnits", api => api.moveUnits(id, location, selection), () => move(units, location), verdict => verdict);
   };
-  game.disbandPlayerUnits = (army, units) => {
-    const id = idOf(game, army);
+  game.disbandPlayerUnits = (units) => {
+    const id = idOf(game, armyOf(game, units));
     const selection = selectionOf(units);
-    return mirror(game, "disbandUnits", api => api.disbandUnits(id, selection), () => disband(army, units), verdict => verdict);
+    return mirror(game, "disbandUnits", api => api.disbandUnits(id, selection), () => disband(units), verdict => verdict);
   };
   game.startBattle = (target, selections) => {
     const battle = start(target, selections);

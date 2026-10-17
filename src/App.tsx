@@ -285,7 +285,7 @@ function App() {
 
     // Move selected army to clicked node
     if (selectedArmy && selectedPlayer === gameRef.current.currentPlayer) {
-      gameRef.current.movePlayerUnits(selectedArmy, location, [...selectedUnits]);
+      gameRef.current.movePlayerUnits([...selectedUnits], location);
       clearSelection();
       update();
       return;
@@ -369,7 +369,7 @@ function App() {
   // --- Army actions ---
   const handleDisband = useCallback(() => {
     if (!selectedArmy) return;
-    gameRef.current.disbandPlayerUnits(selectedArmy, [...selectedUnits]);
+    gameRef.current.disbandPlayerUnits([...selectedUnits]);
     if (selectedArmy.units.length === 0) clearSelection();
     else setSelectedUnits(new Set(selectedArmy.units));
     update();

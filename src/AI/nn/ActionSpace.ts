@@ -79,11 +79,11 @@ export function executeArmyAction(
 ): boolean {
   if (actionType === ACTION_MOVE) {
     const targetNode = NODE_ORDER[targetNodeIdx];
-    return game.movePlayerUnits(army, targetNode, unitsToMove(game, army, targetNode, fractions));
+    return game.movePlayerUnits(unitsToMove(game, army, targetNode, fractions), targetNode);
   }
 
   if (actionType === ACTION_DISBAND) {
-    return game.disbandPlayerUnits(army, unitsToDisband(army, fractions));
+    return game.disbandPlayerUnits(unitsToDisband(army, fractions));
   }
 
   return false;
