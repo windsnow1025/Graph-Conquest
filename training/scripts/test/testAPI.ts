@@ -12,6 +12,8 @@
  * Step 1, the boundary: create, fromJSON, toJSON, getState.
  * Step 2, the turn and recruitment: endTurn, recruit, getRecruitLocations,
  * canBuy, isGameOver, getWinner, getUpkeep.
+ * Step 3, the army identifier and unit selection: moveUnits, disbandUnits,
+ * getMovableLocations, getMoveCandidates, getDistance.
  *
  * Usage: npx tsx training/scripts/test/testAPI.ts
  */
@@ -21,7 +23,10 @@ import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import GameSystem from "../../../src/lib/GameSystem";
 import GameAPI from "../../../src/lib/GameAPI";
+import type {ArmyId, UnitSelection} from "../../../src/lib/GameAPI";
 import Player from "../../../src/lib/Player";
+import type Army from "../../../src/lib/Army";
+import type Unit from "../../../src/lib/Unit";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {randomTurn} from "../../src/Opponents";
 import {greedyTurn} from "../../src/GreedyAI";
@@ -49,6 +54,25 @@ function same(label: string, actual: unknown, expected: unknown): void {
   if (!isDeepStrictEqual(actual, expected)) {
     fail(`${label}\n  api:    ${JSON.stringify(actual)}\n  engine: ${JSON.stringify(expected)}`);
   }
+}
+
+function idOf(game: GameSystem, army: Army): ArmyId {
+  const owner = game.allPlayers.find(player => player.armies.includes(army))!;
+  return {owner: owner.name, location: army.location, unitType: army.unitType};
+}
+
+/** The unit list a consumer passes to the engine, as states and counts in the same order. */
+function selectionOf(units: Unit[]): UnitSelection[] {
+  const entries: UnitSelection[] = [];
+  for (const unit of units) {
+    const last = entries.at(-1);
+    if (last && last.currentHealth === unit.currentHealth && last.remainingMoves === unit.remainingMoves && last.canAttack === unit.canAttack) {
+      last.count++;
+    } else {
+      entries.push({currentHealth: unit.currentHealth, remainingMoves: unit.remainingMoves, canAttack: unit.canAttack, count: 1});
+    }
+  }
+  return entries;
 }
 
 /** The exit and the verdicts on illegal input, on the default configuration. */
@@ -90,6 +114,26 @@ function checkExitAndInput(): void {
   check("canBuy answers false to malformed input", !api.canBuy("Dragon", 1) && !api.canBuy("Infantry", 1.5) && !api.canBuy("Infantry", 0));
   check("getUpkeep of an unknown player is undefined", api.getUpkeep("Nobody") === undefined);
   check("a legal recruit succeeds and shows in the state", api.recruit("Infantry", "Blue Home", 5) && api.getState().players[0].armies[0].units.length === 5);
+
+  const blueInfantry: ArmyId = {owner: "Blue", location: "Blue Home", unitType: "Infantry"};
+  const neutralCenter: ArmyId = {owner: "Neutral", location: "Center", unitType: "Infantry"};
+  const nowhere: ArmyId = {owner: "Blue", location: "Nowhere", unitType: "Infantry"};
+  const recruited = (count: number): UnitSelection[] => [{currentHealth: 10, remainingMoves: 0, canAttack: false, count}];
+  const oneMover: UnitSelection[] = [{currentHealth: 10, remainingMoves: 1, canAttack: true, count: 1}];
+  const armed = JSON.stringify(api.toJSON());
+  check("an unknown army is rejected", !api.moveUnits(nowhere, "Blue to Center", recruited(1)) && !api.disbandUnits(nowhere, recruited(1)));
+  check("an army of another player is rejected", !api.moveUnits(neutralCenter, "Blue to Center", recruited(1)) && !api.disbandUnits(neutralCenter, recruited(1)));
+  check("an unknown destination is rejected", !api.moveUnits(blueInfantry, "Nowhere", recruited(1)));
+  check("a selection with a fractional count is rejected", !api.disbandUnits(blueInfantry, [{...recruited(1)[0], count: 1.5}]));
+  check("a state no unit is in is rejected", !api.disbandUnits(blueInfantry, oneMover));
+  check("more units than the army has in that state is rejected", !api.disbandUnits(blueInfantry, recruited(6)));
+  check("units without moves cannot move", !api.moveUnits(blueInfantry, "Blue to Center", recruited(1)));
+  check("rejected army commands leave the state untouched", JSON.stringify(api.toJSON()) === armed);
+  check("queries about unknown or foreign armies give the empty answer",
+    api.getMovableLocations(nowhere).length === 0 && api.getMovableLocations(neutralCenter).length === 0
+    && api.getMoveCandidates(nowhere, "Blue to Center").length === 0 && api.getMoveCandidates(blueInfantry, "Nowhere").length === 0);
+  check("getDistance answers the map", api.getDistance("Blue Home", "Center") === 2 && api.getDistance("Nowhere", "Center") === undefined);
+  check("a legal disband by state and count succeeds", api.disbandUnits(blueInfantry, recruited(2)) && api.getState().players[0].armies[0].units.length === 3);
   check("endTurn passes the turn", api.endTurn() && api.getState().currentPlayerIndex === 1);
 }
 
@@ -117,6 +161,22 @@ function checkAll(game: GameSystem, after: string): void {
   same("getRecruitLocations", api.getRecruitLocations(), game.recruitLocations);
   for (const unitType of Object.keys(game.unitStatsMap)) {
     for (const count of [1, 7, 1000]) same("canBuy", api.canBuy(unitType, count), game.currentPlayer.canBuy(unitType, count));
+  }
+
+  const enemyLocations = game.enemyLocations;
+  for (const army of game.currentPlayer.armies) {
+    const id = idOf(game, army);
+    const movable = army.getMovableLocations(game.gameMap, enemyLocations);
+    same("getMovableLocations", api.getMovableLocations(id), movable);
+    for (const destination of movable) {
+      same("getMoveCandidates", api.getMoveCandidates(id, destination), structuredClone(army.getMoveCandidates(destination, game.gameMap, enemyLocations)));
+    }
+  }
+  const other = game.allPlayers.find(player => player !== game.currentPlayer && player.armies.length > 0);
+  if (other) same("getMovableLocations of another player's army", api.getMovableLocations(idOf(game, other.armies[0])), []);
+  const nodes = [...game.gameMap.nodes.keys()];
+  for (const from of nodes.slice(0, 3)) {
+    for (const to of nodes) same("getDistance", api.getDistance(from, to), game.gameMap.getDistance(from, to));
   }
 }
 
@@ -147,10 +207,22 @@ function hide(target: object): void {
 function watch(game: GameSystem): void {
   stats.games++;
   const recruit = game.recruitPlayerArmy.bind(game);
+  const move = game.movePlayerUnits.bind(game);
+  const disband = game.disbandPlayerUnits.bind(game);
   const start = game.startBattle.bind(game);
   const end = game.endTurn.bind(game);
   game.recruitPlayerArmy = (unitType, location, count) =>
     mirror(game, "recruit", api => api.recruit(unitType, location, count), () => recruit(unitType, location, count), army => army !== null);
+  game.movePlayerUnits = (army, location, units) => {
+    const id = idOf(game, army);
+    const selection = selectionOf(units);
+    return mirror(game, "moveUnits", api => api.moveUnits(id, location, selection), () => move(army, location, units), verdict => verdict);
+  };
+  game.disbandPlayerUnits = (army, units) => {
+    const id = idOf(game, army);
+    const selection = selectionOf(units);
+    return mirror(game, "disbandUnits", api => api.disbandUnits(id, selection), () => disband(army, units), verdict => verdict);
+  };
   game.startBattle = (target, selections) => {
     const battle = start(target, selections);
     if (battle) checkAll(game, "startBattle");
