@@ -72,18 +72,16 @@ function idOf(game: GameSystem, army: Army): ArmyId {
   return {owner: owner.name, location: army.location, unitType: army.unitType};
 }
 
-/** The unit list a consumer passes to the engine, as states and counts in the same order. */
+/** The unit list a consumer passes to the engine, as one state and count per state, in order of first appearance. */
 function selectionOf(units: Unit[]): UnitSelection[] {
-  const entries: UnitSelection[] = [];
+  const entries = new Map<string, UnitSelection>();
   for (const unit of units) {
-    const last = entries.at(-1);
-    if (last && last.currentHealth === unit.currentHealth && last.remainingMoves === unit.remainingMoves && last.canAttack === unit.canAttack) {
-      last.count++;
-    } else {
-      entries.push({currentHealth: unit.currentHealth, remainingMoves: unit.remainingMoves, canAttack: unit.canAttack, count: 1});
-    }
+    const state = `${unit.currentHealth}|${unit.remainingMoves}|${unit.canAttack}`;
+    const entry = entries.get(state);
+    if (entry) entry.count++;
+    else entries.set(state, {currentHealth: unit.currentHealth, remainingMoves: unit.remainingMoves, canAttack: unit.canAttack, count: 1});
   }
-  return entries;
+  return [...entries.values()];
 }
 
 /** The exit, the input errors and the verdicts, on the default configuration. */
@@ -142,6 +140,7 @@ function checkExitAndInput(): void {
   check("a selection with a fractional count is an input error", inputError(() => api.disbandUnits(blueInfantry, [{...recruited(1)[0], count: 1.5}])));
   check("a state no unit is in is an input error", inputError(() => api.disbandUnits(blueInfantry, oneMover)));
   check("more units than the army has in that state is an input error", inputError(() => api.disbandUnits(blueInfantry, recruited(6))));
+  check("a state selected twice is an input error", inputError(() => api.disbandUnits(blueInfantry, [...recruited(1), ...recruited(1)])));
   check("an army of another player is an input error", inputError(() => api.moveUnits(neutralCenter, "Blue to Center", recruited(1))) && inputError(() => api.disbandUnits(neutralCenter, recruited(1))));
   check("an empty selection is the false verdict", !api.moveUnits(blueInfantry, "Blue to Center", []) && !api.disbandUnits(blueInfantry, []));
   check("units without moves cannot move", !api.moveUnits(blueInfantry, "Blue to Center", recruited(1)));
