@@ -378,7 +378,7 @@ function App() {
   // --- Battle actions ---
   const handleStartBattle = useCallback(() => {
     if (!battleTarget || battlePicked.size === 0) return;
-    gameRef.current.startBattle(battleTarget, battlePicked);
+    gameRef.current.startBattle([...battlePicked.values()].flat(), battleTarget);
     clearSelection();
     clearBattleAttack();
     update();

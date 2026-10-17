@@ -110,6 +110,11 @@ function fullSelections(armies: Army[]): Map<Army, Unit[]> {
   return new Map(armies.map(army => [army, army.attackCandidates]));
 }
 
+/** The units of selections, army by army. */
+function unitsOf(selections: Map<Army, Unit[]>): Unit[] {
+  return [...selections.values()].flat();
+}
+
 /** The same selections on a clone: armies and units are matched by index. */
 function cloneSelections(game: GameSystem, clone: GameSystem, playerIdx: number, selections: Map<Army, Unit[]>): Map<Army, Unit[]> {
   const player = game.players[playerIdx];
@@ -276,7 +281,7 @@ function simpleBattlePhase(game: GameSystem, playerIdx: number, excludeLocations
       const c = cloneGame(game);
       const cCandidates = c.getArmiesInRange(location);
       if (cCandidates.length === 0) continue;
-      const battle = c.startBattle(location, fullSelections(cCandidates));
+      const battle = c.startBattle(unitsOf(fullSelections(cCandidates)), location);
       if (!battle) continue;
       simpleBattleLoop(c, battle);
       c.resolveBattle();
@@ -289,7 +294,7 @@ function simpleBattlePhase(game: GameSystem, playerIdx: number, excludeLocations
         if (selected.length <= 1) break;
         const without = selected.filter(a => a !== army);
         const cW = cloneGame(game);
-        const bW = cW.startBattle(location, cloneSelections(game, cW, playerIdx, fullSelections(without)));
+        const bW = cW.startBattle(unitsOf(cloneSelections(game, cW, playerIdx, fullSelections(without))), location);
         if (!bW) continue;
         simpleBattleLoop(cW, bW);
         cW.resolveBattle();
@@ -301,7 +306,7 @@ function simpleBattlePhase(game: GameSystem, playerIdx: number, excludeLocations
       }
 
       if (selected.length === 0) continue;
-      const realBattle = game.startBattle(location, fullSelections(selected));
+      const realBattle = game.startBattle(unitsOf(fullSelections(selected)), location);
       if (!realBattle) continue;
       simpleBattleLoop(game, realBattle);
       game.resolveBattle();
@@ -621,7 +626,7 @@ function evalBattle(game: GameSystem, playerIdx: number, location: string, selec
     ? fullSelections(c.getArmiesInRange(location))
     : cloneSelections(game, c, playerIdx, selections);
   if (cSelections.size === 0) return null;
-  const b = c.startBattle(location, cSelections);
+  const b = c.startBattle(unitsOf(cSelections), location);
   if (!b) return null;
   simpleBattleLoop(c, b);
   c.resolveBattle();
@@ -771,7 +776,7 @@ function* lookaheadBattlePhase(game: GameSystem, playerIdx: number, samples: Sam
     const selected = lookaheadSelectArmies(game, playerIdx, location, execChoice, candidates, samples, model);
     if (selected.size === 0) continue;
 
-    const realBattle = game.startBattle(location, selected);
+    const realBattle = game.startBattle(unitsOf(selected), location);
     if (!realBattle) continue;
     // Run entire battle synchronously (no yield) to prevent UI from taking control
     const battleGen = lookaheadBattleLoop(game, realBattle, playerIdx, samples);

@@ -149,7 +149,7 @@ function randomBattlePhase(game: GameSystem): void {
       }
       if (selected.size === 0) continue;
 
-      const battle = game.startBattle(location, selected);
+      const battle = game.startBattle([...selected.values()].flat(), location);
       if (!battle) continue;
 
       randomBattleLoop(battle);

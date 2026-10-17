@@ -388,7 +388,7 @@ function* battlePhase(
     const selected = selectBattleArmies(game, model, playerIdx, choice, candidates, opts);
     if (selected.size === 0) continue;
 
-    const battle = game.startBattle(location, selected);
+    const battle = game.startBattle([...selected.values()].flat(), location);
     if (!battle) continue;
 
     yield;

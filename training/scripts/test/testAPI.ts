@@ -246,8 +246,8 @@ function watch(game: GameSystem): void {
     const selection = selectionOf(units);
     return mirror(game, "disbandUnits", api => api.disbandUnits(id, selection), () => disband(units), verdict => verdict);
   };
-  game.startBattle = (target, selections) => {
-    const battle = start(target, selections);
+  game.startBattle = (units, target) => {
+    const battle = start(units, target);
     if (battle) checkAll(game, "startBattle");
     return battle;
   };
