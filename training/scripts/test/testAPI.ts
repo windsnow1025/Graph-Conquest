@@ -1,12 +1,19 @@
 /**
  * Conformance of GameAPI with the engine, grown with the API one step at a
  * time: each step adds the checks of what it added. Seeded games are played
- * on the engine as in traceCore.ts; at the start of every game, after every
+ * on the engine as in traceCore.ts. At the start of every game, after every
  * turn and at every battle start, a GameAPI built from the engine's save is
- * compared with the engine. A first section checks the exit on the default
+ * compared with the engine; every command of the engine that the API offers
+ * is also issued on a GameAPI built from the engine's save just before the
+ * engine executes it, and the verdicts and the saves are compared. A first
+ * section checks the exit, the input errors and the verdicts on the default
  * configuration.
  *
  * Step 1, the boundary: create, fromJSON, toJSON, getState.
+ * Step 2, the turn and recruitment: endTurn, recruit, getRecruitLocations,
+ * canBuy, isGameOver, getWinner, getUpkeep.
+ * Step 3, the army identifier and unit selection: moveUnits, disbandUnits,
+ * getMovableLocations, getMoveCandidates, getDistance.
  *
  * Usage: npx tsx training/scripts/test/testAPI.ts
  */
@@ -15,8 +22,11 @@ import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import GameSystem from "../../../src/lib/GameSystem";
-import GameAPI from "../../../src/lib/GameAPI";
+import GameAPI, {InputError} from "../../../src/lib/GameAPI";
+import type {ArmyId, UnitSelection} from "../../../src/lib/GameAPI";
 import Player from "../../../src/lib/Player";
+import type Army from "../../../src/lib/Army";
+import type Unit from "../../../src/lib/Unit";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {randomTurn} from "../../src/Opponents";
 import {greedyTurn} from "../../src/GreedyAI";
@@ -28,7 +38,7 @@ const SEED = 20261003;
 const RANDOM_GAMES = 40;
 const GREEDY_GAMES = 3;
 
-const stats = {games: 0, stateChecks: 0};
+const stats = {games: 0, commands: 0, rejected: 0, checks: 0, answers: 0};
 
 function fail(message: string): never {
   throw new Error(`MISMATCH: ${message}`);
@@ -39,8 +49,46 @@ function check(label: string, ok: boolean): void {
   console.log(`ok  ${label}`);
 }
 
-/** The exit, on the default configuration. */
-function checkExit(): void {
+/** Passes when the call fails with an InputError; any other outcome is a mismatch. */
+function throws(label: string, call: () => unknown): void {
+  try {
+    call();
+  } catch (e) {
+    if (!(e instanceof InputError)) throw e;
+    console.log(`ok  ${label}`);
+    return;
+  }
+  fail(`${label}: no InputError`);
+}
+
+function same(label: string, actual: unknown, expected: unknown): void {
+  stats.answers++;
+  if (!isDeepStrictEqual(actual, expected)) {
+    fail(`${label}\n  api:    ${JSON.stringify(actual)}\n  engine: ${JSON.stringify(expected)}`);
+  }
+}
+
+function idOf(game: GameSystem, army: Army): ArmyId {
+  const owner = game.allPlayers.find(player => player.armies.includes(army))!;
+  return {owner: owner.name, location: army.location, unitType: army.unitType};
+}
+
+/** The unit list a consumer passes to the engine, as states and counts in the same order. */
+function selectionOf(units: Unit[]): UnitSelection[] {
+  const entries: UnitSelection[] = [];
+  for (const unit of units) {
+    const last = entries.at(-1);
+    if (last && last.currentHealth === unit.currentHealth && last.remainingMoves === unit.remainingMoves && last.canAttack === unit.canAttack) {
+      last.count++;
+    } else {
+      entries.push({currentHealth: unit.currentHealth, remainingMoves: unit.remainingMoves, canAttack: unit.canAttack, count: 1});
+    }
+  }
+  return entries;
+}
+
+/** The exit, the input errors and the verdicts, on the default configuration. */
+function checkExitAndInput(): void {
   const api = GameAPI.create(DefaultConfig);
   const engine = new GameSystem(DefaultConfig);
   check("create builds the same game as the engine", isDeepStrictEqual(api.toJSON(), engine.toJSON()));
@@ -67,11 +115,51 @@ function checkExit(): void {
   state.nodeOwnership.clear();
   state.turnCount = 50;
   check("writing to a returned state changes nothing", isDeepStrictEqual(api.getState(), structuredClone(engine)));
+
+  const before = JSON.stringify(api.toJSON());
+  throws("a fractional count is an input error", () => api.recruit("Infantry", "Blue Home", 2.5));
+  throws("a count of zero is an input error", () => api.recruit("Infantry", "Blue Home", 0));
+  throws("a negative count is an input error", () => api.recruit("Infantry", "Blue Home", -1));
+  throws("an unknown unit type is an input error", () => api.recruit("Dragon", "Blue Home", 1));
+  throws("an inherited name is not a unit type", () => api.recruit("toString", "Blue Home", 1));
+  throws("an unknown location is an input error", () => api.recruit("Infantry", "Nowhere", 1));
+  check("a location of another player is the false verdict", !api.recruit("Infantry", "Red Home", 1));
+  check("input errors and rejections leave the state untouched", JSON.stringify(api.toJSON()) === before);
+  throws("canBuy with an unknown unit type is an input error", () => api.canBuy("Dragon", 1));
+  throws("canBuy with a fractional count is an input error", () => api.canBuy("Infantry", 1.5));
+  check("canBuy answers the rule", api.canBuy("Infantry", 1) && !api.canBuy("Infantry", 1000));
+  throws("getUpkeep of an unknown player is an input error", () => api.getUpkeep("Nobody"));
+  check("a legal recruit succeeds and shows in the state", api.recruit("Infantry", "Blue Home", 5) && api.getState().players[0].armies[0].units.length === 5);
+
+  const blueInfantry: ArmyId = {owner: "Blue", location: "Blue Home", unitType: "Infantry"};
+  const neutralCenter: ArmyId = {owner: "Neutral", location: "Center", unitType: "Infantry"};
+  const nowhere: ArmyId = {owner: "Blue", location: "Nowhere", unitType: "Infantry"};
+  const recruited = (count: number): UnitSelection[] => [{currentHealth: 10, remainingMoves: 0, canAttack: false, count}];
+  const oneMover: UnitSelection[] = [{currentHealth: 10, remainingMoves: 1, canAttack: true, count: 1}];
+  const armed = JSON.stringify(api.toJSON());
+  throws("an unknown army is an input error", () => api.moveUnits(nowhere, "Blue to Center", recruited(1)));
+  throws("an unknown owner is an input error", () => api.disbandUnits({...blueInfantry, owner: "Nobody"}, recruited(1)));
+  throws("an unknown destination is an input error", () => api.moveUnits(blueInfantry, "Nowhere", recruited(1)));
+  throws("a selection with a fractional count is an input error", () => api.disbandUnits(blueInfantry, [{...recruited(1)[0], count: 1.5}]));
+  throws("a state no unit is in is an input error", () => api.disbandUnits(blueInfantry, oneMover));
+  throws("more units than the army has in that state is an input error", () => api.disbandUnits(blueInfantry, recruited(6)));
+  check("an army of another player is the false verdict", !api.moveUnits(neutralCenter, "Blue to Center", recruited(1)) && !api.disbandUnits(neutralCenter, recruited(1)));
+  check("an empty selection is the false verdict", !api.moveUnits(blueInfantry, "Blue to Center", []) && !api.disbandUnits(blueInfantry, []));
+  check("units without moves cannot move", !api.moveUnits(blueInfantry, "Blue to Center", recruited(1)));
+  check("input errors and rejections leave the state untouched", JSON.stringify(api.toJSON()) === armed);
+  throws("a movement query about an unknown army is an input error", () => api.getMovableLocations(nowhere));
+  throws("a movement query with an unknown destination is an input error", () => api.getMoveCandidates(blueInfantry, "Nowhere"));
+  check("movement queries about another player's army give the empty answer",
+    api.getMovableLocations(neutralCenter).length === 0 && api.getMoveCandidates(neutralCenter, "Blue to Center").length === 0);
+  check("getDistance answers the map", api.getDistance("Blue Home", "Center") === 2);
+  throws("getDistance with an unknown node is an input error", () => api.getDistance("Nowhere", "Center"));
+  check("a legal disband by state and count succeeds", api.disbandUnits(blueInfantry, recruited(2)) && api.getState().players[0].armies[0].units.length === 3);
+  check("endTurn passes the turn", api.endTurn() && api.getState().currentPlayerIndex === 1);
 }
 
-/** getState() and toJSON() of an API built from the engine's save, against the engine. */
-function checkState(game: GameSystem, after: string): void {
-  stats.stateChecks++;
+/** The state and every query of an API built from the engine's save, against the engine. */
+function checkAll(game: GameSystem, after: string): void {
+  stats.checks++;
   const api = GameAPI.fromJSON(game.toJSON());
   const state = api.getState();
   if (state instanceof GameSystem || state.players[0] instanceof Player) fail(`getState returned a live object after ${after}`);
@@ -86,30 +174,91 @@ function checkState(game: GameSystem, after: string): void {
       && battle.defenderArmies.every(army => battle.defenderPlayer.armies.includes(army));
     if (!shared) fail(`the battle of a state does not share its objects with the players after ${after}`);
   }
+
+  same("getWinner", api.getWinner(), game.winner?.name ?? null);
+  same("isGameOver", api.isGameOver(), game.gameOver);
+  for (const player of game.allPlayers) same("getUpkeep", api.getUpkeep(player.name), game.getUpkeep(player));
+  same("getRecruitLocations", api.getRecruitLocations(), game.recruitLocations);
+  for (const unitType of Object.keys(game.unitStatsMap)) {
+    for (const count of [1, 7, 1000]) same("canBuy", api.canBuy(unitType, count), game.currentPlayer.canBuy(unitType, count));
+  }
+
+  const enemyLocations = game.enemyLocations;
+  for (const army of game.currentPlayer.armies) {
+    const id = idOf(game, army);
+    const movable = army.getMovableLocations(game.gameMap, enemyLocations);
+    same("getMovableLocations", api.getMovableLocations(id), movable);
+    for (const destination of movable) {
+      same("getMoveCandidates", api.getMoveCandidates(id, destination), structuredClone(army.getMoveCandidates(destination, game.gameMap, enemyLocations)));
+    }
+  }
+  const other = game.allPlayers.find(player => player !== game.currentPlayer && player.armies.length > 0);
+  if (other) same("getMovableLocations of another player's army", api.getMovableLocations(idOf(game, other.armies[0])), []);
+  const nodes = [...game.gameMap.nodes.keys()];
+  for (const from of nodes.slice(0, 3)) {
+    for (const to of nodes) same("getDistance", api.getDistance(from, to), game.gameMap.getDistance(from, to));
+  }
 }
 
-/** Checks the state at the start of the game, after every turn and at every battle start. */
+/**
+ * Issues a command on an API built from the engine's save, then runs it on the
+ * engine, and compares the verdicts and the saves. Returns the engine's result.
+ */
+function mirror<T>(game: GameSystem, command: string, onApi: (api: GameAPI) => boolean, onEngine: () => T, verdictOf: (result: T) => boolean): T {
+  stats.commands++;
+  const api = GameAPI.fromJSON(game.toJSON());
+  const actual = onApi(api);
+  const result = onEngine();
+  const expected = verdictOf(result);
+  if (!expected) stats.rejected++;
+  if (actual !== expected) fail(`verdict of ${command}: engine ${expected}, api ${actual}`);
+  if (JSON.stringify(api.toJSON()) !== JSON.stringify(game.toJSON())) fail(`state after ${command}`);
+  return result;
+}
+
+/** The wrappers of watch() are own properties of the engine; non-enumerable, they stay out of the engine's cloned state. */
+function hide(target: object): void {
+  for (const [key, value] of Object.entries(target)) {
+    if (typeof value === "function") Object.defineProperty(target, key, {enumerable: false});
+  }
+}
+
+/** Mirrors the commands the API offers and checks the state and the queries at every check point. */
 function watch(game: GameSystem): void {
   stats.games++;
+  const recruit = game.recruitPlayerArmy.bind(game);
+  const move = game.movePlayerUnits.bind(game);
+  const disband = game.disbandPlayerUnits.bind(game);
   const start = game.startBattle.bind(game);
   const end = game.endTurn.bind(game);
+  game.recruitPlayerArmy = (unitType, location, count) =>
+    mirror(game, "recruit", api => api.recruit(unitType, location, count), () => recruit(unitType, location, count), army => army !== null);
+  game.movePlayerUnits = (army, location, units) => {
+    const id = idOf(game, army);
+    const selection = selectionOf(units);
+    return mirror(game, "moveUnits", api => api.moveUnits(id, location, selection), () => move(army, location, units), verdict => verdict);
+  };
+  game.disbandPlayerUnits = (army, units) => {
+    const id = idOf(game, army);
+    const selection = selectionOf(units);
+    return mirror(game, "disbandUnits", api => api.disbandUnits(id, selection), () => disband(army, units), verdict => verdict);
+  };
   game.startBattle = (target, selections) => {
     const battle = start(target, selections);
-    if (battle) checkState(game, "startBattle");
+    if (battle) checkAll(game, "startBattle");
     return battle;
   };
   game.endTurn = () => {
-    const expected = end();
-    checkState(game, "endTurn");
+    const expected = mirror(game, "endTurn", api => api.endTurn(), end, verdict => verdict);
+    checkAll(game, "endTurn");
     return expected;
   };
-  // The wrappers are own properties of the engine; non-enumerable, they stay out of the engine's cloned state
-  for (const key of ["startBattle", "endTurn"]) Object.defineProperty(game, key, {enumerable: false});
-  checkState(game, "start");
+  hide(game);
+  checkAll(game, "start");
 }
 
 async function main() {
-  checkExit();
+  checkExitAndInput();
 
   await setupBackend();
   Math.random = seededRandom(SEED);
