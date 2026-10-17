@@ -16,7 +16,7 @@
  * getMovableLocations, getMoveCandidates, getDistance.
  * Step 4, starting a battle: startBattle, getAttackableLocations,
  * getArmiesInRange, hasAttackTargets.
- * Step 5, fighting: canAct, getTargetsInRange, getUnitsNeeded,
+ * Step 5, fighting: hasBattle, canAct, getTargetsInRange, getUnitsNeeded,
  * getRemainingAttacks, allocateAttack, retreat.
  * Step 6, the fork: fork.
  *
@@ -181,7 +181,7 @@ function checkExitAndInput(): void {
   check("a battle at a node without an enemy is the false verdict", !api.startBattle(attackers(1), "Blue Home"));
   check("a battle out of range is the false verdict", !api.startBattle(attackers(1), "Center"));
   check("input errors and rejections leave the state untouched", JSON.stringify(api.toJSON()) === beforeBattle);
-  check("a legal battle starts and shows in the state", api.startBattle(attackers(3), "Blue to Center") && api.getState().currentBattle?.attackerArmies.length === 1);
+  check("a legal battle starts and shows in the state", api.startBattle(attackers(3), "Blue to Center") && api.hasBattle() && api.getState().currentBattle?.attackerArmies.length === 1);
   const inBattle: UnitSelection[] = [{currentHealth: 10, remainingMoves: 1, canAttack: false, count: 1}];
   check("recruiting, moving and ending the turn are rejected during a battle",
     !api.recruit("Infantry", "Blue Home", 1) && !api.moveUnits(blueInfantry, inBattle, "B to R") && !api.endTurn());
@@ -190,19 +190,20 @@ function checkExitAndInput(): void {
   check("battle queries answer the battle",
     api.canAct(blueInfantry) && api.getRemainingAttacks(blueInfantry) === 3
     && isDeepStrictEqual(api.getTargetsInRange(blueInfantry), [defender]) && api.getUnitsNeeded(blueInfantry, defender) === 4);
-  check("battle queries about an army outside the battle are input errors",
+  check("battle queries about an unknown or outside army are input errors",
     inputError(() => api.canAct(nowhere)) && inputError(() => api.getTargetsInRange(neutralCenter))
     && inputError(() => api.getUnitsNeeded(blueInfantry, neutralCenter)) && inputError(() => api.getRemainingAttacks(neutralCenter)));
+  check("an army outside the battle cannot act", !api.canAct(neutralCenter));
   check("allocating to an army outside the battle is an input error", inputError(() => api.allocateAttack(blueInfantry, [{target: neutralCenter, count: 1}])));
   check("a fractional allocation is an input error", inputError(() => api.allocateAttack(blueInfantry, [{target: defender, count: 1.5}])));
   check("a target listed twice is an input error", inputError(() => api.allocateAttack(blueInfantry, [{target: defender, count: 1}, {target: defender, count: 1}])));
   check("an army that cannot act now gets the false verdict", !api.allocateAttack(defender, [{target: blueInfantry, count: 1}]));
   check("a legal allocation succeeds and the round advances",
     api.allocateAttack(blueInfantry, [{target: defender, count: 3}]) && api.getState().currentBattle?.round === 2 && api.getRemainingAttacks(blueInfantry) === 2);
-  check("retreat ends the battle", api.retreat() && api.getState().currentBattle === null);
+  check("retreat ends the battle", api.retreat() && !api.hasBattle() && api.getState().currentBattle === null);
   check("battle queries and allocations without a battle are input errors",
-    inputError(() => api.canAct(blueInfantry)) && inputError(() => api.allocateAttack(blueInfantry, [])));
-  check("retreating without a battle is the false verdict", !api.retreat());
+    inputError(() => api.getRemainingAttacks(blueInfantry)) && inputError(() => api.allocateAttack(blueInfantry, [])));
+  check("without a battle nothing can act and retreating is the false verdict", !api.canAct(blueInfantry) && !api.retreat());
   check("the turn can end after the battle", api.endTurn());
 
   const fork = api.fork();
@@ -255,6 +256,7 @@ function checkAll(game: GameSystem, after: string): void {
   for (const from of nodes.slice(0, 3)) {
     for (const to of nodes) same("getDistance", api.getDistance(from, to), game.gameMap.getDistance(from, to));
   }
+  same("hasBattle", api.hasBattle(), game.currentBattle !== null);
   same("getAttackableLocations", api.getAttackableLocations(), game.attackableLocations);
   for (const target of game.attackableLocations) {
     same("getArmiesInRange", api.getArmiesInRange(target), game.getArmiesInRange(target).map(army => idOf(game, army)));
