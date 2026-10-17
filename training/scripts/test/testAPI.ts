@@ -6,7 +6,7 @@
  * compared with the engine; every command of the engine that the API offers
  * is also issued on a GameAPI built from the engine's save just before the
  * engine executes it, and the verdicts and the saves are compared. A first
- * section checks the exit and the verdicts on illegal input on the default
+ * section checks the exit, the input errors and the verdicts on the default
  * configuration.
  *
  * Step 1, the boundary: create, fromJSON, toJSON, getState.
@@ -22,7 +22,7 @@ import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import GameSystem from "../../../src/lib/GameSystem";
-import GameAPI from "../../../src/lib/GameAPI";
+import GameAPI, {InputError} from "../../../src/lib/GameAPI";
 import type {ArmyId, UnitSelection} from "../../../src/lib/GameAPI";
 import Player from "../../../src/lib/Player";
 import type Army from "../../../src/lib/Army";
@@ -47,6 +47,18 @@ function fail(message: string): never {
 function check(label: string, ok: boolean): void {
   if (!ok) fail(label);
   console.log(`ok  ${label}`);
+}
+
+/** Passes when the call fails with an InputError; any other outcome is a mismatch. */
+function throws(label: string, call: () => unknown): void {
+  try {
+    call();
+  } catch (e) {
+    if (!(e instanceof InputError)) throw e;
+    console.log(`ok  ${label}`);
+    return;
+  }
+  fail(`${label}: no InputError`);
 }
 
 function same(label: string, actual: unknown, expected: unknown): void {
@@ -75,7 +87,7 @@ function selectionOf(units: Unit[]): UnitSelection[] {
   return entries;
 }
 
-/** The exit and the verdicts on illegal input, on the default configuration. */
+/** The exit, the input errors and the verdicts, on the default configuration. */
 function checkExitAndInput(): void {
   const api = GameAPI.create(DefaultConfig);
   const engine = new GameSystem(DefaultConfig);
@@ -105,14 +117,18 @@ function checkExitAndInput(): void {
   check("writing to a returned state changes nothing", isDeepStrictEqual(api.getState(), structuredClone(engine)));
 
   const before = JSON.stringify(api.toJSON());
-  check("a fractional count is rejected", !api.recruit("Infantry", "Blue Home", 2.5));
-  check("a count of zero or less is rejected", !api.recruit("Infantry", "Blue Home", 0) && !api.recruit("Infantry", "Blue Home", -1));
-  check("an unknown unit type is rejected", !api.recruit("Dragon", "Blue Home", 1) && !api.recruit("toString", "Blue Home", 1));
-  check("an unknown location is rejected", !api.recruit("Infantry", "Nowhere", 1));
-  check("a location of another player is rejected", !api.recruit("Infantry", "Red Home", 1));
-  check("rejected commands leave the state untouched", JSON.stringify(api.toJSON()) === before);
-  check("canBuy answers false to malformed input", !api.canBuy("Dragon", 1) && !api.canBuy("Infantry", 1.5) && !api.canBuy("Infantry", 0));
-  check("getUpkeep of an unknown player is undefined", api.getUpkeep("Nobody") === undefined);
+  throws("a fractional count is an input error", () => api.recruit("Infantry", "Blue Home", 2.5));
+  throws("a count of zero is an input error", () => api.recruit("Infantry", "Blue Home", 0));
+  throws("a negative count is an input error", () => api.recruit("Infantry", "Blue Home", -1));
+  throws("an unknown unit type is an input error", () => api.recruit("Dragon", "Blue Home", 1));
+  throws("an inherited name is not a unit type", () => api.recruit("toString", "Blue Home", 1));
+  throws("an unknown location is an input error", () => api.recruit("Infantry", "Nowhere", 1));
+  check("a location of another player is the false verdict", !api.recruit("Infantry", "Red Home", 1));
+  check("input errors and rejections leave the state untouched", JSON.stringify(api.toJSON()) === before);
+  throws("canBuy with an unknown unit type is an input error", () => api.canBuy("Dragon", 1));
+  throws("canBuy with a fractional count is an input error", () => api.canBuy("Infantry", 1.5));
+  check("canBuy answers the rule", api.canBuy("Infantry", 1) && !api.canBuy("Infantry", 1000));
+  throws("getUpkeep of an unknown player is an input error", () => api.getUpkeep("Nobody"));
   check("a legal recruit succeeds and shows in the state", api.recruit("Infantry", "Blue Home", 5) && api.getState().players[0].armies[0].units.length === 5);
 
   const blueInfantry: ArmyId = {owner: "Blue", location: "Blue Home", unitType: "Infantry"};
@@ -121,18 +137,22 @@ function checkExitAndInput(): void {
   const recruited = (count: number): UnitSelection[] => [{currentHealth: 10, remainingMoves: 0, canAttack: false, count}];
   const oneMover: UnitSelection[] = [{currentHealth: 10, remainingMoves: 1, canAttack: true, count: 1}];
   const armed = JSON.stringify(api.toJSON());
-  check("an unknown army is rejected", !api.moveUnits(nowhere, "Blue to Center", recruited(1)) && !api.disbandUnits(nowhere, recruited(1)));
-  check("an army of another player is rejected", !api.moveUnits(neutralCenter, "Blue to Center", recruited(1)) && !api.disbandUnits(neutralCenter, recruited(1)));
-  check("an unknown destination is rejected", !api.moveUnits(blueInfantry, "Nowhere", recruited(1)));
-  check("a selection with a fractional count is rejected", !api.disbandUnits(blueInfantry, [{...recruited(1)[0], count: 1.5}]));
-  check("a state no unit is in is rejected", !api.disbandUnits(blueInfantry, oneMover));
-  check("more units than the army has in that state is rejected", !api.disbandUnits(blueInfantry, recruited(6)));
+  throws("an unknown army is an input error", () => api.moveUnits(nowhere, "Blue to Center", recruited(1)));
+  throws("an unknown owner is an input error", () => api.disbandUnits({...blueInfantry, owner: "Nobody"}, recruited(1)));
+  throws("an unknown destination is an input error", () => api.moveUnits(blueInfantry, "Nowhere", recruited(1)));
+  throws("a selection with a fractional count is an input error", () => api.disbandUnits(blueInfantry, [{...recruited(1)[0], count: 1.5}]));
+  throws("a state no unit is in is an input error", () => api.disbandUnits(blueInfantry, oneMover));
+  throws("more units than the army has in that state is an input error", () => api.disbandUnits(blueInfantry, recruited(6)));
+  check("an army of another player is the false verdict", !api.moveUnits(neutralCenter, "Blue to Center", recruited(1)) && !api.disbandUnits(neutralCenter, recruited(1)));
+  check("an empty selection is the false verdict", !api.moveUnits(blueInfantry, "Blue to Center", []) && !api.disbandUnits(blueInfantry, []));
   check("units without moves cannot move", !api.moveUnits(blueInfantry, "Blue to Center", recruited(1)));
-  check("rejected army commands leave the state untouched", JSON.stringify(api.toJSON()) === armed);
-  check("queries about unknown or foreign armies give the empty answer",
-    api.getMovableLocations(nowhere).length === 0 && api.getMovableLocations(neutralCenter).length === 0
-    && api.getMoveCandidates(nowhere, "Blue to Center").length === 0 && api.getMoveCandidates(blueInfantry, "Nowhere").length === 0);
-  check("getDistance answers the map", api.getDistance("Blue Home", "Center") === 2 && api.getDistance("Nowhere", "Center") === undefined);
+  check("input errors and rejections leave the state untouched", JSON.stringify(api.toJSON()) === armed);
+  throws("a movement query about an unknown army is an input error", () => api.getMovableLocations(nowhere));
+  throws("a movement query with an unknown destination is an input error", () => api.getMoveCandidates(blueInfantry, "Nowhere"));
+  check("movement queries about another player's army give the empty answer",
+    api.getMovableLocations(neutralCenter).length === 0 && api.getMoveCandidates(neutralCenter, "Blue to Center").length === 0);
+  check("getDistance answers the map", api.getDistance("Blue Home", "Center") === 2);
+  throws("getDistance with an unknown node is an input error", () => api.getDistance("Nowhere", "Center"));
   check("a legal disband by state and count succeeds", api.disbandUnits(blueInfantry, recruited(2)) && api.getState().players[0].armies[0].units.length === 3);
   check("endTurn passes the turn", api.endTurn() && api.getState().currentPlayerIndex === 1);
 }
