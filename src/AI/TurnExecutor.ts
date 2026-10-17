@@ -14,7 +14,7 @@
  *       done is offered only after the first army, so a chosen node is always
  *       attacked; the chosen army commits a fraction per commit group of its
  *       attack-ready units
- *     - startBattle → battle rounds → resolveBattle → next step
+ *     - startBattle → battle rounds (the engine resolves the battle when it ends) → next step
  *   Phase 3: Army actions (post-battle movement)
  *   Phase 4: Recruitment
  *   endTurn
@@ -252,7 +252,7 @@ function* battleAllocatePhase(
 
     // Always submit (empty = pass): marks the army acted so the phase can end.
     // A rejection here means an invariant broke; failing loud beats spinning forever.
-    if (!battle.allocateAttack(army, allocations)) {
+    if (!game.allocateAttack(army, allocations)) {
       throw new Error(battleStuckReport(
         `battleAllocatePhase: allocation rejected (${army.unitType}@${army.location}, ${allocations.size} allocs)`, battle));
     }
@@ -281,7 +281,7 @@ function* battleLoop(
         const retreat = chooseBinary(pred.battleRetreat, eps);
         opts.onDecision?.({playerIdx, state, pred, action: {type: "battleRetreat", battleRetreat: retreat.choice ? 1 : 0},
           explored: retreat.explored});
-        if (retreat.choice) { battle.retreat(); yield; return; }
+        if (retreat.choice) { game.retreat(); yield; return; }
       }
 
       yield* battleAllocatePhase(game, model, battle, playerIdx, true, opts);
@@ -393,7 +393,6 @@ function* battlePhase(
 
     yield;
     yield* battleLoop(game, model, battle, playerIdx, opts);
-    game.resolveBattle();
     yield;
   }
 }
@@ -450,7 +449,6 @@ export function* executeNNTurnSteps(game: GameSystem, model: NNModel, opts?: Tur
   // A loaded save can carry an in-progress battle; finish it before the phases
   if (game.currentBattle) {
     yield* battleLoop(game, model, game.currentBattle, playerIdx, o);
-    game.resolveBattle();
     yield;
   }
 

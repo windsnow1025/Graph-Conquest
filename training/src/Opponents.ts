@@ -73,7 +73,7 @@ function randomArmyActions(game: GameSystem): void {
   }
 }
 
-function randomBattleAllocate(battle: Battle, isAttacker: boolean): void {
+function randomBattleAllocate(game: GameSystem, battle: Battle, isAttacker: boolean): void {
   const armies = isAttacker ? battle.attackerArmies : battle.defenderArmies;
 
   for (const army of [...armies]) {
@@ -101,14 +101,14 @@ function randomBattleAllocate(battle: Battle, isAttacker: boolean): void {
     }
 
     // Always submit (empty = pass) so the army is marked acted; reject = broken invariant
-    if (!battle.allocateAttack(army, allocations)) {
+    if (!game.allocateAttack(army, allocations)) {
       throw new Error(battleStuckReport(
         `randomBattleAllocate: allocation rejected (${army.unitType}@${army.location})`, battle));
     }
   }
 }
 
-function randomBattleLoop(battle: Battle): void {
+function randomBattleLoop(game: GameSystem, battle: Battle): void {
   const maxIter = battle.maxArmyAttacks * 4 + 8;
   let iter = 0;
   while (battle.result === BattleResult.Ongoing) {
@@ -117,12 +117,12 @@ function randomBattleLoop(battle: Battle): void {
     }
     if (battle.phase === BattlePhase.AttackerTurn) {
       if (battle.actedArmies.size === 0 && Math.random() < 0.1) {
-        battle.retreat();
+        game.retreat();
         return;
       }
-      randomBattleAllocate(battle, true);
+      randomBattleAllocate(game, battle, true);
     } else {
-      randomBattleAllocate(battle, false);
+      randomBattleAllocate(game, battle, false);
     }
   }
 }
@@ -152,8 +152,7 @@ function randomBattlePhase(game: GameSystem): void {
       const battle = game.startBattle([...selected.values()].flat(), location);
       if (!battle) continue;
 
-      randomBattleLoop(battle);
-      game.resolveBattle();
+      randomBattleLoop(game, battle);
 
       attacked = true;
       break;

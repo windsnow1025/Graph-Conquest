@@ -228,7 +228,7 @@ Phase 2: Battle loop
         Overflow logic: if future enemies can't consume remaining,
           ask AI → if fraction < overflowPct → system auto-fills all
       Defender turn: neutral/defeated defenders are played by the engine, else AI allocate
-    Resolve battle, add node to fought
+    Add node to fought (the engine resolves the battle when it ends)
 
 Phase 3: Army actions (post-battle)
   Same as Phase 1

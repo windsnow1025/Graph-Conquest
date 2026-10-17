@@ -13,7 +13,7 @@ import DefaultConfig from "./lib/data/DefaultConfig";
 import Player from "./lib/Player";
 import Army from "./lib/Army";
 import type Unit from "./lib/Unit";
-import {BattlePhase, BattleResult} from "./lib/Battle";
+import {BattlePhase} from "./lib/Battle";
 import type {DefaultUnitName} from "./lib/data/DefaultUnitStatsMap.ts";
 import DefaultUnitStatsMap from "./lib/data/DefaultUnitStatsMap.ts";
 import GameCanvas, {Base_Width, Base_Height} from "./components/GameCanvas";
@@ -144,14 +144,6 @@ function App() {
   useEffect(() => {
     if (!battle || isAITurn) return;
 
-    // Auto-resolve when battle ends
-    if (battle.result !== BattleResult.Ongoing) {
-      gameRef.current.resolveBattle();
-      clearBattleAttack();
-      update();
-      return;
-    }
-
     // AI-controlled defender uses their model (NN or greedy)
     if (battle.phase === BattlePhase.DefenderTurn && aiPlayers.has(battle.defenderPlayer.name)) {
       aiDefenderPhase(gameRef.current, battle, gameMode).then(update, (e: unknown) => setAiError(e instanceof Error ? e.message : String(e)));
@@ -165,7 +157,7 @@ function App() {
       const army = battle.defenderArmies[0];
       const target = battle.attackerArmies[0];
       if (battle.canAct(army)) {
-        battle.allocateAttack(army, new Map([[target, army.battleUnits.length]]));
+        gameRef.current.allocateAttack(army, new Map([[target, army.battleUnits.length]]));
         clearBattleAttack();
         update();
         return;
@@ -258,9 +250,7 @@ function App() {
     ? new Set(gameRef.current.getArmiesInRange(battleTarget))
     : new Set<Army>();
 
-  const battleUnacted = battle && battle.result === BattleResult.Ongoing
-    ? new Set(battle.unactedArmies)
-    : new Set<Army>();
+  const battleUnacted = battle ? new Set(battle.unactedArmies) : new Set<Army>();
   const allocatedTargets = new Set(battleAllocations.keys());
   const battleTargets = battle && battleAttackArmy && !battleAllocTarget
     ? new Set(battle.getTargetsInRange(battleAttackArmy).filter(a => !allocatedTargets.has(a)))
@@ -313,7 +303,6 @@ function App() {
 
     if (g.currentBattle) {
       const b = g.currentBattle;
-      if (b.result !== BattleResult.Ongoing) return;
       if (b.currentArmies.includes(army) && b.canAct(army)) {
         setBattleAttackArmy(army);
         setBattleAllocations(new Map());
@@ -393,7 +382,7 @@ function App() {
 
   const handleBattleConfirm = useCallback(() => {
     if (!battleAttackArmy || !battle) return;
-    battle.allocateAttack(battleAttackArmy, battleAllocations);
+    gameRef.current.allocateAttack(battleAttackArmy, battleAllocations);
     clearBattleAttack();
     update();
   }, [battle, battleAttackArmy, battleAllocations, update, clearBattleAttack]);
@@ -401,7 +390,7 @@ function App() {
 
   const handleBattleRetreat = useCallback(() => {
     if (!battle) return;
-    battle.retreat();
+    gameRef.current.retreat();
     clearBattleAttack();
     update();
   }, [battle, update, clearBattleAttack]);
@@ -413,7 +402,7 @@ function App() {
     const army = battle.attackerArmies[0];
     const target = battle.defenderArmies[0];
     if (battle.canAct(army)) {
-      battle.allocateAttack(army, new Map([[target, army.battleUnits.length]]));
+      gameRef.current.allocateAttack(army, new Map([[target, army.battleUnits.length]]));
     }
     clearBattleAttack();
     update();
@@ -543,20 +532,11 @@ function App() {
         {/* ===== TOP CENTER: Battle Status ===== */}
         {battle && (
           <Paper elevation={3} sx={{position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)", p: 1, ...overlayPaper}}>
-            {battle.result === BattleResult.Ongoing ? (
-              <Typography variant="body2" sx={{fontWeight: "bold"}}>
-                Battle at {battle.targetLocation} — Round {battle.round} — {
-                  battle.phase === BattlePhase.AttackerTurn ? battle.attackerPlayer.name : battle.defenderPlayer.name
-                }'s Turn
-              </Typography>
-            ) : (
-              <Typography variant="body2" sx={{fontWeight: "bold"}}>
-                {battle.result === BattleResult.AttackerWins && `${battle.attackerPlayer.name} Wins!`}
-                {battle.result === BattleResult.DefenderWins && `${battle.defenderPlayer.name} Wins!`}
-                {battle.result === BattleResult.Retreat && `${battle.attackerPlayer.name} Retreated`}
-                {battle.result === BattleResult.Draw && "Draw (Attacks Exhausted)"}
-              </Typography>
-            )}
+            <Typography variant="body2" sx={{fontWeight: "bold"}}>
+              Battle at {battle.targetLocation} — Round {battle.round} — {
+                battle.phase === BattlePhase.AttackerTurn ? battle.attackerPlayer.name : battle.defenderPlayer.name
+              }'s Turn
+            </Typography>
           </Paper>
         )}
 
@@ -637,7 +617,7 @@ function App() {
         )}
 
         {/* Battle action overlay — positioned below target node */}
-        {battle && battle.result === BattleResult.Ongoing && !battleAttackArmy && !isAITurn
+        {battle && !battleAttackArmy && !isAITurn
           && battle.phase === BattlePhase.AttackerTurn && battle.actedArmies.size === 0 && (() => {
           const pos = getNodeScreenPos(battle.targetLocation);
           if (!pos) return null;

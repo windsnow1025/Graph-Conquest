@@ -229,7 +229,7 @@ function simpleArmyActions(game: GameSystem, playerIdx: number): void {
   }
 }
 
-function simpleBattleAllocate(_game: GameSystem, battle: Battle, isAttacker: boolean): void {
+function simpleBattleAllocate(game: GameSystem, battle: Battle, isAttacker: boolean): void {
   const armies = isAttacker ? battle.attackerArmies : battle.defenderArmies;
   for (const army of [...armies]) {
     if (!battle.canAct(army) || battle.result !== BattleResult.Ongoing) continue;
@@ -244,7 +244,7 @@ function simpleBattleAllocate(_game: GameSystem, battle: Battle, isAttacker: boo
       remaining -= killNeeded;
     }
     // Always submit (empty = pass) so the army is marked acted; reject = broken invariant
-    if (!battle.allocateAttack(army, allocations)) {
+    if (!game.allocateAttack(army, allocations)) {
       throw new Error(battleStuckReport(
         `simpleBattleAllocate: allocation rejected (${army.unitType}@${army.location})`, battle));
     }
@@ -284,7 +284,6 @@ function simpleBattlePhase(game: GameSystem, playerIdx: number, excludeLocations
       const battle = c.startBattle(unitsOf(fullSelections(cCandidates)), location);
       if (!battle) continue;
       simpleBattleLoop(c, battle);
-      c.resolveBattle();
       // Rollout: move armies after battle to capture cleared nodes
       simpleArmyActions(c, playerIdx);
       if (quantile(c, playerIdx) <= qBefore) continue;
@@ -297,7 +296,6 @@ function simpleBattlePhase(game: GameSystem, playerIdx: number, excludeLocations
         const bW = cW.startBattle(unitsOf(cloneSelections(game, cW, playerIdx, fullSelections(without))), location);
         if (!bW) continue;
         simpleBattleLoop(cW, bW);
-        cW.resolveBattle();
         const qW = quantile(cW, playerIdx);
         if (qW >= qBefore) {
           const idx = selected.indexOf(army);
@@ -309,7 +307,6 @@ function simpleBattlePhase(game: GameSystem, playerIdx: number, excludeLocations
       const realBattle = game.startBattle(unitsOf(fullSelections(selected)), location);
       if (!realBattle) continue;
       simpleBattleLoop(game, realBattle);
-      game.resolveBattle();
       attacked = true; break;
     }
     if (!attacked) break;
@@ -511,7 +508,6 @@ function* lookaheadBattleAllocate(
         }
         if (priorAllocs.size > 0) bEval.allocateAttack(cArmy, priorAllocs);
         simpleBattleLoop(cEval, bEval);
-        cEval.resolveBattle();
         // For a defender evaluation the clone's current player is still the attacker,
         // whose GameSystem methods would act for the wrong side during the rollout
         cEval.currentPlayerIndex = playerIdx;
@@ -556,7 +552,7 @@ function* lookaheadBattleAllocate(
       }
     }
     // Always submit (empty = pass) so the army is marked acted; reject = broken invariant
-    if (!battle.allocateAttack(army, allocations)) {
+    if (!game.allocateAttack(army, allocations)) {
       throw new Error(battleStuckReport(
         `lookaheadBattleAllocate: allocation rejected (${army.unitType}@${army.location})`, battle));
     }
@@ -573,15 +569,13 @@ function* lookaheadBattleLoop(
     if (++iter > maxIter) throw new Error(battleStuckReport("lookaheadBattleLoop stuck", battle));
     if (battle.phase === BattlePhase.AttackerTurn) {
       if (battle.actedArmies.size === 0) {
-        const {game: cRet, battle: bRet} = cloneBattle(game);
-        bRet.retreat();
-        cRet.resolveBattle();
+        const cRet = cloneGame(game);
+        cRet.retreat();
         simpleRollout(cRet, playerIdx, 3);
         const qRetreat = quantile(cRet, playerIdx);
 
         const {game: cFight, battle: bFight} = cloneBattle(game);
         simpleBattleLoop(cFight, bFight);
-        cFight.resolveBattle();
         simpleRollout(cFight, playerIdx, 3);
         const qFight = quantile(cFight, playerIdx);
 
@@ -601,7 +595,7 @@ function* lookaheadBattleLoop(
         }
 
         if (doRetreat) {
-          battle.retreat();
+          game.retreat();
           yield;
           return;
         }
@@ -629,7 +623,6 @@ function evalBattle(game: GameSystem, playerIdx: number, location: string, selec
   const b = c.startBattle(unitsOf(cSelections), location);
   if (!b) return null;
   simpleBattleLoop(c, b);
-  c.resolveBattle();
   simpleRollout(c, playerIdx, 3);
   return quantile(c, playerIdx);
 }
@@ -781,7 +774,6 @@ function* lookaheadBattlePhase(game: GameSystem, playerIdx: number, samples: Sam
     // Run entire battle synchronously (no yield) to prevent UI from taking control
     const battleGen = lookaheadBattleLoop(game, realBattle, playerIdx, samples);
     while (!battleGen.next().done) { /* drain */ }
-    game.resolveBattle();
     yield; // UI: battle resolved
   }
 }
@@ -843,7 +835,6 @@ export function* greedyTurnSteps(game: GameSystem, samples?: Sample[]): Generato
   // A loaded save can carry an in-progress battle; finish it before the phases
   if (game.currentBattle) {
     yield* lookaheadBattleLoop(game, game.currentBattle, playerIdx, s);
-    game.resolveBattle();
   }
 
   yield* lookaheadArmyActions(game, playerIdx, s);
