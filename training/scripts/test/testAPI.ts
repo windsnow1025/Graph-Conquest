@@ -356,7 +356,7 @@ async function main() {
     const game = createRandomizedGame();
     watch(game);
     while (!game.gameOver) {
-      if (game.currentPlayerIndex === g % 3) greedyTurn(game);
+      if (game.currentPlayerIndex === g % 3) greedyTurn(GameAPI.of(game));
       else randomTurn(GameAPI.of(game));
     }
   }

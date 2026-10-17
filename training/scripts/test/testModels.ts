@@ -8,6 +8,7 @@ import {setupBackend} from "../../src/setupBackend";
 import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
+import {rulesOf} from "../../../src/AI/nn/StateEncoder";
 import {scorePlayer} from "../../src/GreedyAI";
 import {randomTurn} from "../../src/Opponents";
 import GameAPI from "../../../src/lib/GameAPI";
@@ -37,7 +38,7 @@ async function testVsRandom(label: string, model: NNModel) {
 
     const posName = ["B", "R", "G"][nnIdx];
     const result = winner === "draw" ? "DRAW" : winner === nnName ? "WIN " : "LOSE";
-    const scores = [0, 1, 2].map(i => scorePlayer(game, i));
+    const scores = [0, 1, 2].map(i => scorePlayer(game, rulesOf(game), i));
     console.log(
       `  ${String(g + 1).padStart(2)}/${VS_RANDOM_GAMES} (${posName}) ${result}: ` +
       `${winner.padEnd(5)} T${String(game.turnCount).padEnd(3)} ` +
@@ -80,7 +81,7 @@ async function testThreeWay(models: {label: string; model: NNModel}[]) {
       winsBy[arr[winnerSlot]]++;
     }
 
-    const scores = [0, 1, 2].map(i => scorePlayer(game, i));
+    const scores = [0, 1, 2].map(i => scorePlayer(game, rulesOf(game), i));
     const labels = [0, 1, 2].map(slot => `${models[arr[slot]].label}=${["B","R","G"][slot]}`).join(" ");
     const result = winner === "draw" ? "DRAW " : `${models[arr[["Blue","Red","Green"].indexOf(winner)]].label}`;
     console.log(

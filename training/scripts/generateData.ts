@@ -110,7 +110,7 @@ function winnerIndex(game: GameSystem): number {
 function logGame(prefix: string, g: number, total: number, game: GameSystem, recordCount: number, elapsed: string): void {
   if ((g + 1) % 10 !== 0) return;
   const winner = game.winner?.name ?? "DRAW";
-  const scores = [0, 1, 2].map(i => scorePlayer(game, i));
+  const scores = [0, 1, 2].map(i => scorePlayer(game, rulesOf(game), i));
   const nodes = game.players.map(p => countNodes(game, p));
   logRaw(
     `  ${prefix} ${String(g + 1).padStart(4)}/${total} ${winner.padEnd(5)} T${String(game.turnCount).padEnd(3)} ` +
@@ -279,13 +279,13 @@ async function generateImitation(name: string, dir: string, opts: Map<string, st
 
     const playTurn = (): void => {
       if (opType === "dagger") {
-        if (game.currentPlayerIndex === greedyIdx) daggerTurn(game, daggerModel, gameSamples);
+        if (game.currentPlayerIndex === greedyIdx) daggerTurn(GameAPI.of(game), daggerModel, gameSamples);
         else randomTurn(GameAPI.of(game));
       } else if (opType === "greedy") {
-        if (game.currentPlayerIndex === greedyIdx) greedyTurn(game, gameSamples);
-        else greedyTurn(game);
+        if (game.currentPlayerIndex === greedyIdx) greedyTurn(GameAPI.of(game), gameSamples);
+        else greedyTurn(GameAPI.of(game));
       } else {
-        if (game.currentPlayerIndex === greedyIdx) greedyTurn(game, gameSamples);
+        if (game.currentPlayerIndex === greedyIdx) greedyTurn(GameAPI.of(game), gameSamples);
         else if (opType === "passive") passiveTurn(GameAPI.of(game));
         else randomTurn(GameAPI.of(game));
       }
@@ -350,11 +350,11 @@ async function generateStalemate(name: string, dir: string, opts: Map<string, st
     const gameSamples: Sample[] = [];
     let labeled = 0;
     while (!game.gameOver && labeled < label) {
-      if (game.currentPlayerIndex === nnIdx) { daggerTurn(game, model, gameSamples); labeled++; }
+      if (game.currentPlayerIndex === nnIdx) { daggerTurn(GameAPI.of(game), model, gameSamples); labeled++; }
       else randomTurn(GameAPI.of(game));
     }
     while (!game.gameOver) {
-      if (game.currentPlayerIndex === nnIdx) greedyTurn(game);
+      if (game.currentPlayerIndex === nnIdx) greedyTurn(GameAPI.of(game));
       else randomTurn(GameAPI.of(game));
     }
 

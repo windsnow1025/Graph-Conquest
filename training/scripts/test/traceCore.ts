@@ -56,7 +56,7 @@ async function main() {
     const greedyIdx = g % 3;
     while (!game.gameOver) {
       const turn = game.turnCount, playerIdx = game.currentPlayerIndex;
-      if (playerIdx === greedyIdx) greedyTurn(game);
+      if (playerIdx === greedyIdx) greedyTurn(GameAPI.of(game));
       else randomTurn(GameAPI.of(game));
       console.log(turnLine(`G${g}`, game, turn, playerIdx));
     }

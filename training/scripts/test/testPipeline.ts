@@ -154,7 +154,7 @@ async function main() {
     const game = createRandomizedGame();
     const samples: Sample[] = [];
     for (let t = 0; t < 9 && !game.gameOver; t++) {
-      if (game.currentPlayerIndex === 0) greedyTurn(game, samples);
+      if (game.currentPlayerIndex === 0) greedyTurn(GameAPI.of(game), samples);
       else randomTurn(GameAPI.of(game));
     }
     validateSamples(samples, "Greedy");
@@ -168,7 +168,7 @@ async function main() {
     const game = createRandomizedGame();
     const samples: Sample[] = [];
     for (let t = 0; t < 6 && !game.gameOver; t++) {
-      if (game.currentPlayerIndex === 0) daggerTurn(game, model, samples);
+      if (game.currentPlayerIndex === 0) daggerTurn(GameAPI.of(game), model, samples);
       else randomTurn(GameAPI.of(game));
     }
     validateSamples(samples, "DAgger");

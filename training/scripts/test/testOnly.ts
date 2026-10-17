@@ -8,6 +8,7 @@ import {nodeFileSystem} from "../../src/nodeIO";
 import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
+import {rulesOf} from "../../../src/AI/nn/StateEncoder";
 import {randomTurn} from "../../src/Opponents";
 import GameAPI from "../../../src/lib/GameAPI";
 import {scorePlayer} from "../../src/GreedyAI";
@@ -31,7 +32,7 @@ async function main() {
       if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model);
       else randomTurn(GameAPI.of(game));
     }
-    const scores = [0, 1, 2].map(i => scorePlayer(game, i));
+    const scores = [0, 1, 2].map(i => scorePlayer(game, rulesOf(game), i));
     const nodes = game.players.map(p => countNodes(game, p));
     const winner = game.winner?.name ?? "draw";
     const posName = ["B", "R", "G"][nnIdx];

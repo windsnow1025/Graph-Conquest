@@ -43,12 +43,12 @@ export function greedyTurnStepsUI(game: GameSystem): Generator<void> | null {
     game.endTurn();
     return null;
   }
-  return greedyTurnSteps(game);
+  return greedyTurnSteps(GameAPI.of(game));
 }
 
 export async function aiDefenderPhase(game: GameSystem, battle: Battle, mode: string): Promise<void> {
   if (mode === "greedy") {
-    greedyDefenderPhase(game, battle);
+    greedyDefenderPhase(GameAPI.of(game), battle);
   } else {
     executeNNDefenderPhase(GameAPI.of(game), await loadModel(), battle);
   }

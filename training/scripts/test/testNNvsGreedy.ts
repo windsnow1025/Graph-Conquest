@@ -8,6 +8,7 @@ import {nodeFileSystem} from "../../src/nodeIO";
 import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
+import {rulesOf} from "../../../src/AI/nn/StateEncoder";
 import {randomTurn} from "../../src/Opponents";
 import GameAPI from "../../../src/lib/GameAPI";
 import {greedyTurn, scorePlayer} from "../../src/GreedyAI";
@@ -33,12 +34,12 @@ async function main() {
 
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
       if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model);
-      else if (game.currentPlayerIndex === greedyIdx) greedyTurn(game);
+      else if (game.currentPlayerIndex === greedyIdx) greedyTurn(GameAPI.of(game));
       else randomTurn(GameAPI.of(game));
     }
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-    const scores = [0, 1, 2].map(i => scorePlayer(game, i));
+    const scores = [0, 1, 2].map(i => scorePlayer(game, rulesOf(game), i));
     const nodes = game.players.map(p => countNodes(game, p));
     const winner = game.winner?.name ?? "draw";
     const nnName = ["Blue", "Red", "Green"][nnIdx];

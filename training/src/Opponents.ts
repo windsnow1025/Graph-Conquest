@@ -16,7 +16,7 @@ import type {ArmyData} from "../../src/lib/Army";
 import type {BattleData} from "../../src/lib/Battle";
 import {BattlePhase} from "../../src/lib/Battle";
 import {NODE_ORDER, UNIT_TYPES} from "../../src/AI/nn/GameIndex";
-import {keyOf, armyIdOf, attackReady, battleUnits} from "../../src/AI/nn/Armies";
+import {keyOf, armyIdOf, attackReady, battleUnits, ArmyWalk} from "../../src/AI/nn/Armies";
 import {computeActionTypeMask, executeArmyAction, ACTION_EXIT, ACTION_MOVE} from "../../src/AI/nn/ActionSpace";
 import {NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, selectionsOf} from "../../src/AI/nn/UnitGroups";
 import {battleStuckReport} from "../../src/AI/battleReport";
@@ -41,23 +41,13 @@ function currentArmies(api: GameAPI): {owner: string; armies: ArmyData[]} {
 }
 
 // Terminates without a step budget: every MOVE spends at least one move point
-// and every DISBAND removes at least one unit. The name of an army whose units
-// have all left is forgotten, so an army that forms again at that node acts
-// like the new army it is.
+// and every DISBAND removes at least one unit.
 function randomArmyActions(api: GameAPI): void {
-  const current = currentArmies(api);
-  const owner = current.owner;
-  let armies = current.armies;
-  const processed = new Set<string>();
-  let ai = 0;
-  while (ai < armies.length) {
-    const key = keyOf(armies[ai]);
-    if (processed.has(key)) { ai++; continue; }
-    processed.add(key);
-    const armyId = armyIdOf(owner, armies[ai]);
-
+  const walk = new ArmyWalk(api, api.getState().currentPlayerIndex);
+  for (let next = walk.next(); next; next = walk.next()) {
+    const {armyId} = next;
+    let army = next.army;
     for (;;) {
-      const army = armies[ai];
       // Random action type from legal options
       const mask = computeActionTypeMask(api, armyId);
       const legal = [...mask.keys()].filter(a => mask[a] > 0);
@@ -76,17 +66,10 @@ function randomArmyActions(api: GameAPI): void {
 
       if (!executeArmyAction(api, armyId, army, actionType, targetIdx, fractions)) break;
 
-      armies = currentArmies(api).armies;
-      for (const name of processed) {
-        if (!armies.some(a => keyOf(a) === name)) processed.delete(name);
-      }
-      const newIdx = armies.findIndex(a => keyOf(a) === key);
-      if (newIdx < 0) break;
-      ai = newIdx;
+      const after = walk.acted();
+      if (!after) break;
+      army = after;
     }
-
-    const finalIdx = armies.findIndex(a => keyOf(a) === key);
-    ai = finalIdx < 0 ? ai : finalIdx + 1;
   }
 }
 

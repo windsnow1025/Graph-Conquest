@@ -31,7 +31,7 @@ import {
 } from "./nn/NNModel";
 import {battleStuckReport} from "./battleReport";
 import {NODE_ORDER, NUM_NODES, UNIT_TYPES} from "./nn/GameIndex";
-import {keyOf, armyIdOf, attackReady, battleUnits} from "./nn/Armies";
+import {keyOf, armyIdOf, attackReady, battleUnits, ArmyWalk} from "./nn/Armies";
 import {encodeState, perTypeState} from "./nn/StateEncoder";
 import type {DecisionContext} from "./nn/StateEncoder";
 import {
@@ -117,26 +117,18 @@ function chooseFractions(logits: Float32Array, groups: number, temp: number, eps
 // ─── Phase 1 & 3: Army actions ───
 
 // Terminates without a step budget: every MOVE spends at least one move point
-// and every DISBAND removes at least one unit. The name of an army whose units
-// have all left is forgotten, so an army that forms again at that node acts
-// like the new army it is.
+// and every DISBAND removes at least one unit.
 function* armyActionsPhase(
   api: GameAPI, model: NNModel, playerIdx: number, opts: TurnOptions,
 ): Generator<void> {
-  let state = api.getState();
-  const owner = state.players[playerIdx].name;
-  const processed = new Set<string>();
   const temp = opts.temperature ?? 0;
   const eps = opts.epsilon ?? 0;
-  let ai = 0;
-  while (ai < state.players[playerIdx].armies.length) {
-    const key = keyOf(state.players[playerIdx].armies[ai]);
-    if (processed.has(key)) { ai++; continue; }
-    processed.add(key);
-    const armyId = armyIdOf(owner, state.players[playerIdx].armies[ai]);
-
+  const walk = new ArmyWalk(api, playerIdx);
+  for (let next = walk.next(); next; next = walk.next()) {
+    const {armyId} = next;
+    let army = next.army;
     for (;;) {
-      const army = state.players[playerIdx].armies[ai];
+      const state = walk.state;
       const actionMask = computeActionTypeMask(api, armyId);
       const disbandMask = groupMask(disbandGroups(army.units));
       const context: DecisionContext = {type: "army", army, actionTypeMask: actionMask, disbandMask};
@@ -178,19 +170,11 @@ function* armyActionsPhase(
 
       if (!executeArmyAction(api, armyId, army, actionType, targetIdx, fractions)) break;
 
-      state = api.getState();
-      const armies = state.players[playerIdx].armies;
-      for (const name of processed) {
-        if (!armies.some(a => keyOf(a) === name)) processed.delete(name);
-      }
-      const newIdx = armies.findIndex(a => keyOf(a) === key);
-      if (newIdx < 0) break;
-      ai = newIdx;
+      const after = walk.acted();
+      if (!after) break;
+      army = after;
       yield;
     }
-
-    const finalIdx = state.players[playerIdx].armies.findIndex(a => keyOf(a) === key);
-    ai = finalIdx < 0 ? ai : finalIdx + 1;
   }
 }
 

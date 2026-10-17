@@ -6,6 +6,7 @@ import {setupBackend} from "../../src/setupBackend";
 import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
+import {rulesOf} from "../../../src/AI/nn/StateEncoder";
 import GameAPI from "../../../src/lib/GameAPI";
 import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
@@ -29,8 +30,8 @@ async function main() {
 
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
       if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model);
-      else if (game.currentPlayerIndex === greedyIdx) greedyTurn(game);
-      else greedyTurn(game);  // 3rd player also greedy
+      else if (game.currentPlayerIndex === greedyIdx) greedyTurn(GameAPI.of(game));
+      else greedyTurn(GameAPI.of(game));  // 3rd player also greedy
     }
 
     const winner = game.winner?.name ?? "draw";
@@ -39,7 +40,7 @@ async function main() {
     else if (winner === nnName) nnWins++;
     else greedyWins++;
 
-    const scores = [0, 1, 2].map(i => scorePlayer(game, i));
+    const scores = [0, 1, 2].map(i => scorePlayer(game, rulesOf(game), i));
     const result = winner === "draw" ? "DRAW" : winner === nnName ? "NN  " : "GRD ";
     console.log(
       `  ${String(g + 1).padStart(2)}/${GAMES} (NN=${["B","R","G"][nnIdx]}) ${result}: ` +

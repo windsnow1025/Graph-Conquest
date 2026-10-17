@@ -8,6 +8,7 @@ import type Player from "../../src/lib/Player";
 import DefaultConfig from "../../src/lib/data/DefaultConfig";
 import type {GameConfig} from "../../src/lib/Config";
 import {UNIT_TYPES} from "../../src/AI/nn/GameIndex";
+import {rulesOf} from "../../src/AI/nn/StateEncoder";
 import {executeNNTurn} from "../../src/AI/TurnExecutor";
 import {randomTurn} from "./Opponents";
 import GameAPI from "../../src/lib/GameAPI";
@@ -281,7 +282,7 @@ export async function testNNvsRandom(modelDir: string, games: number = TEST_GAME
       if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), testModel);
       else randomTurn(GameAPI.of(game));
     }
-    const scores = [0, 1, 2].map(i => scorePlayer(game, i));
+    const scores = [0, 1, 2].map(i => scorePlayer(game, rulesOf(game), i));
     const units = game.players.map(p => p.armies.reduce((s, a) => s + a.units.length, 0));
     const nodes = game.players.map(p => countNodes(game, p));
     const winner = game.winner?.name ?? "draw";
