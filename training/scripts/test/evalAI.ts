@@ -14,7 +14,7 @@
  *   npx tsx training/scripts/test/evalAI.ts --compare public/model-old-v2-backup  # Compare two models
  */
 import {setupBackend} from "../../src/setupBackend";
-import GameSystem from "../../../src/lib/GameSystem";
+import type {GameData} from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {NNModel} from "../../../src/AI/nn/NNModel";
@@ -67,10 +67,10 @@ const MAX_TURNS = 100;
 
 // ─── Game simulation ───
 
-function countNodes(game: GameSystem, playerIdx: number): number {
+function countNodes(state: GameData, playerIdx: number): number {
   let count = 0;
-  const player = game.players[playerIdx];
-  for (const [, owner] of game.nodeOwnership) {
+  const player = state.players[playerIdx];
+  for (const [, owner] of state.nodeOwnership) {
     if (owner === player) count++;
   }
   return count;
@@ -81,28 +81,30 @@ function runGame(
   nnPlayerIdx: number,
   opponentType: OpponentType,
 ): GameResult {
-  const game = new GameSystem(DefaultConfig);
+  const api = GameAPI.create(DefaultConfig);
 
-  for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-    const playerIdx = game.currentPlayerIndex;
+  for (let turn = 0; turn < MAX_TURNS * 3 && !api.isGameOver(); turn++) {
+    const playerIdx = api.getState().currentPlayerIndex;
 
     if (playerIdx === nnPlayerIdx) {
-      executeNNTurn(GameAPI.of(game), model);
+      executeNNTurn(api, model);
     } else {
       switch (opponentType) {
-        case "random": randomTurn(GameAPI.of(game)); break;
-        case "passive": passiveTurn(GameAPI.of(game)); break;
+        case "random": randomTurn(api); break;
+        case "passive": passiveTurn(api); break;
       }
     }
   }
 
-  const winnerIdx = game.winner ? game.players.indexOf(game.winner) : -1;
+  const state = api.getState();
+  const winner = api.getWinner();
+  const winnerIdx = winner === null ? -1 : state.players.findIndex(p => p.name === winner);
 
   return {
     winnerIdx,
-    turns: game.turnCount,
-    finalNodes: [countNodes(game, 0), countNodes(game, 1), countNodes(game, 2)],
-    finalDefeated: [game.players[0].defeated, game.players[1].defeated, game.players[2].defeated],
+    turns: state.turnCount,
+    finalNodes: [countNodes(state, 0), countNodes(state, 1), countNodes(state, 2)],
+    finalDefeated: [state.players[0].defeated, state.players[1].defeated, state.players[2].defeated],
   };
 }
 

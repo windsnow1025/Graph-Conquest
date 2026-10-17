@@ -4,7 +4,8 @@
 import {NNModel} from "../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "./nodeIO";
 import GameSystem from "../../src/lib/GameSystem";
-import type Player from "../../src/lib/Player";
+import type {GameData} from "../../src/lib/GameSystem";
+import type {PlayerData} from "../../src/lib/Player";
 import DefaultConfig from "../../src/lib/data/DefaultConfig";
 import type {GameConfig} from "../../src/lib/Config";
 import {UNIT_TYPES} from "../../src/AI/nn/GameIndex";
@@ -242,8 +243,8 @@ export async function trainWithPython(
 
 // ─── Shared game stats ───
 
-export function countNodes(game: GameSystem, player: Player): number {
-  return [...game.nodeOwnership.values()].filter(o => o === player).length;
+export function countNodes(state: GameData, player: PlayerData): number {
+  return [...state.nodeOwnership.values()].filter(o => o === player).length;
 }
 
 export function copyModelDir(src: string, dest: string): void {

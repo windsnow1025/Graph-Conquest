@@ -6,7 +6,6 @@
  *        npx tsx training/scripts/test/testAI.ts --max-turns 80   # Increase max turns per game
  */
 import {setupBackend} from "../../src/setupBackend";
-import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {NNModel} from "../../../src/AI/nn/NNModel";
@@ -38,31 +37,32 @@ async function runGame(model: NNModel, maxTurns: number, gameIndex: number): Pro
   winner: string | null;
   turns: number;
 }> {
-  const game = new GameSystem(DefaultConfig);
+  const api = GameAPI.create(DefaultConfig);
 
   console.log(`\n${"═".repeat(60)}`);
   console.log(`  Game ${gameIndex + 1}`);
   console.log(`${"═".repeat(60)}`);
 
-  for (let turn = 0; turn < maxTurns * 3 && !game.gameOver; turn++) {
-    const player = game.currentPlayer;
-    const playerIdx = game.currentPlayerIndex;
+  for (let turn = 0; turn < maxTurns * 3 && !api.isGameOver(); turn++) {
+    const {players, currentPlayerIndex: playerIdx} = api.getState();
+    const player = players[playerIdx];
 
     if (player.defeated) {
-      game.endTurn();
+      api.endTurn();
       continue;
     }
 
     // Blue = NN, Red/Green = random opponent
     if (player.name === "Blue") {
-      executeNNTurn(GameAPI.of(game), model);
+      executeNNTurn(api, model);
     } else {
-      randomTurn(GameAPI.of(game));
+      randomTurn(api);
     }
 
     // Print state after each player's turn (every 3rd turn = 1 round)
-    if (playerIdx === 2 || game.winner) {
-      const p = game.players;
+    if (playerIdx === 2 || api.getWinner() !== null) {
+      const state = api.getState();
+      const p = state.players;
       const playerInfos = p.map(pl => {
         if (pl.defeated) return `${pl.name}(DEAD)`;
         const units = pl.armies.reduce((s, a) => s + a.units.length, 0);
@@ -74,25 +74,27 @@ async function runGame(model: NNModel, maxTurns: number, gameIndex: number): Pro
 
       const nodeCount = p.map(pl => {
         let count = 0;
-        for (const [, owner] of game.nodeOwnership) {
+        for (const [, owner] of state.nodeOwnership) {
           if (owner === pl) count++;
         }
         return `${pl.name[0]}=${count}`;
       });
 
-      console.log(`  Turn ${game.turnCount} | ${nodeCount.join(",")}`);
+      console.log(`  Turn ${state.turnCount} | ${nodeCount.join(",")}`);
       for (const info of playerInfos) {
         console.log(`    ${info}`);
       }
     }
   }
 
-  if (game.winner) {
-    console.log(`\n  >>> ${game.winner.name} WINS! (Turn ${game.turnCount}) <<<`);
-    return {winner: game.winner.name, turns: game.turnCount};
+  const winner = api.getWinner();
+  const turns = api.getState().turnCount;
+  if (winner !== null) {
+    console.log(`\n  >>> ${winner} WINS! (Turn ${turns}) <<<`);
+    return {winner, turns};
   } else {
-    console.log(`\n  >>> Game timed out at turn ${game.turnCount} <<<`);
-    return {winner: null, turns: game.turnCount};
+    console.log(`\n  >>> Game timed out at turn ${turns} <<<`);
+    return {winner: null, turns};
   }
 }
 

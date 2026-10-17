@@ -5,7 +5,6 @@
 import {setupBackend} from "../../src/setupBackend";
 import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
-import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {randomTurn} from "../../src/Opponents";
@@ -25,15 +24,17 @@ async function main() {
   let wins = 0, losses = 0, draws = 0;
 
   for (let g = 0; g < numGames; g++) {
-    const game = new GameSystem(DefaultConfig);
+    const api = GameAPI.create(DefaultConfig);
     const nnIdx = g % 3;
-    for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model);
-      else randomTurn(GameAPI.of(game));
+    for (let turn = 0; turn < MAX_TURNS * 3 && !api.isGameOver(); turn++) {
+      if (api.getState().currentPlayerIndex === nnIdx) executeNNTurn(api, model);
+      else randomTurn(api);
     }
-    const scores = [0, 1, 2].map(i => scorePlayer(GameAPI.of(game), constantsOf(game), i));
-    const nodes = game.players.map(p => countNodes(game, p));
-    const winner = game.winner?.name ?? "draw";
+    const state = api.getState();
+    const constants = constantsOf(state);
+    const scores = [0, 1, 2].map(i => scorePlayer(api, constants, i));
+    const nodes = state.players.map(p => countNodes(state, p));
+    const winner = api.getWinner() ?? "draw";
     const posName = ["B", "R", "G"][nnIdx];
     const nnName = ["Blue", "Red", "Green"][nnIdx];
 
@@ -43,7 +44,7 @@ async function main() {
     else draws++;
 
     console.log(
-      `  ${result} Game ${String(g + 1).padStart(3)}/${numGames} (${posName}): ${winner.padEnd(5)} T${String(game.turnCount).padEnd(3)} ` +
+      `  ${result} Game ${String(g + 1).padStart(3)}/${numGames} (${posName}): ${winner.padEnd(5)} T${String(state.turnCount).padEnd(3)} ` +
       `scores=[${scores.map(s => String(s.toFixed(0)).padStart(4)).join(",")}] ` +
       `nodes=[${nodes.map(n => String(n).padStart(2)).join(",")}]`
     );

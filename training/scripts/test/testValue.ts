@@ -12,9 +12,8 @@ import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import type {TurnOptions, DecisionInfo} from "../../../src/AI/TurnExecutor";
-import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
-import {encodeState, rulesOf} from "../../../src/AI/nn/StateEncoder";
+import {encodeState} from "../../../src/AI/nn/StateEncoder";
 import {randomTurn} from "../../src/Opponents";
 import GameAPI from "../../../src/lib/GameAPI";
 import {terminalValue, DRAW_VALUE} from "../../src/SampleTypes";
@@ -36,26 +35,26 @@ async function evaluateValueHead(label: string, modelDir: string) {
   let wins = 0, losses = 0, draws = 0;
 
   for (let g = 0; g < NUM_GAMES; g++) {
-    const game = new GameSystem(DefaultConfig);
+    const api = GameAPI.create(DefaultConfig);
     const nnIdx = g % 3;
     // Record value predictions for all 3 players each turn
     const perPlayerRecords: { turnCount: number; predValue: number; playerIdx: number }[] = [];
 
     const opts: TurnOptions = {
       onDecision: (info: DecisionInfo) => {
+        const state = api.getState();
         // Record NN player's own prediction
         perPlayerRecords.push({
-          turnCount: game.turnCount,
+          turnCount: state.turnCount,
           predValue: info.pred.value,
           playerIdx: nnIdx,
         });
         // Also predict from other 2 players' perspectives
         for (let pi = 0; pi < 3; pi++) {
           if (pi === nnIdx) continue;
-          const state = encodeState(game, rulesOf(game), pi);
-          const pred = model.predict(state);
+          const pred = model.predict(encodeState(state, api, pi));
           perPlayerRecords.push({
-            turnCount: game.turnCount,
+            turnCount: state.turnCount,
             predValue: pred.value,
             playerIdx: pi,
           });
@@ -63,19 +62,20 @@ async function evaluateValueHead(label: string, modelDir: string) {
       },
     };
 
-    for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model, opts);
-      else randomTurn(GameAPI.of(game));
+    for (let turn = 0; turn < MAX_TURNS * 3 && !api.isGameOver(); turn++) {
+      if (api.getState().currentPlayerIndex === nnIdx) executeNNTurn(api, model, opts);
+      else randomTurn(api);
     }
 
-    const winner = game.winner?.name ?? "draw";
+    const state = api.getState();
+    const winner = api.getWinner() ?? "draw";
     const nnName = ["Blue", "Red", "Green"][nnIdx];
     if (winner === "draw") draws++;
     else if (winner === nnName) wins++;
     else losses++;
 
     for (const rec of perPlayerRecords) {
-      const outcome = terminalValue(winner, game.players[rec.playerIdx]);
+      const outcome = terminalValue(winner, state.players[rec.playerIdx]);
       allRecords.push({ turnCount: rec.turnCount, predValue: rec.predValue, finalOutcome: outcome });
     }
   }
