@@ -83,7 +83,7 @@ async function main() {
   log("\n1. NN-vs-random recording (2 games, 12 rounds cap):");
   for (let g = 0; g < 2; g++) {
     const game = createRandomizedGame();
-    const {records, outcomes} = nnVsRandomGame(game, model, g % 3, 12, 1.0, 0.2);
+    const {records, outcomes} = nnVsRandomGame(GameAPI.of(game), model, g % 3, 12, 1.0, 0.2);
     const samples = recordsToSamples(records, outcomes);
     validateSamples(samples, `RL game ${g + 1}`);
     allSamples.push(...samples);
@@ -100,7 +100,7 @@ async function main() {
 
     for (let g = 0; g < 2; g++) {
       const game = createRandomizedGame();
-      const result = nnVsRandomGame(game, model, g % 3, 12, 1.0, 0.2);
+      const result = nnVsRandomGame(GameAPI.of(game), model, g % 3, 12, 1.0, 0.2);
       const winner = game.winner;
       const winnerIdx = winner ? game.players.findIndex(p => p.name === winner.name) : -1;
       const terminalStates = [0, 1, 2].map(pi => encodeState(game, rulesOf(game), pi));

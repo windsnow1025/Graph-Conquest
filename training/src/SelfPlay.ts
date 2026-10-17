@@ -20,13 +20,13 @@ import {NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS} from "../../src/
 import {NUM_NODES} from "../../src/AI/nn/GameIndex";
 import {
   encodeState, CTX_BASE, CTX_ARMY_OFF, CTX_MOV_OFF, CTX_MCNT_OFF, CTX_BTGT_OFF, CTX_BSEL_OFF,
-  ARMY_ACTION_MASK_OFF, ARMY_DISBAND_MASK_OFF, MOV_LEGAL_MASK_OFF, MCNT_GROUP_MASK_OFF, BSEL_COMMIT_MASK_OFF, rulesOf,
+  ARMY_ACTION_MASK_OFF, ARMY_DISBAND_MASK_OFF, MOV_LEGAL_MASK_OFF, MCNT_GROUP_MASK_OFF, BSEL_COMMIT_MASK_OFF,
 } from "../../src/AI/nn/StateEncoder";
 import type {Sample} from "./SampleTypes";
 import {emptySample, terminalValue} from "./SampleTypes";
 import {randomTurn} from "./Opponents";
-import GameAPI from "../../src/lib/GameAPI";
-import type GameSystem from "../../src/lib/GameSystem";
+import type GameAPI from "../../src/lib/GameAPI";
+import type {GameData} from "../../src/lib/GameSystem";
 
 export interface RawRecord {
   playerIdx: number;
@@ -77,12 +77,12 @@ function makeRecordingOpts(records: RawRecord[], temperature: number, epsilon: n
   };
 }
 
-function takeSnapshot(game: GameSystem, model: NNModel, records: RawRecord[], snapshots: TurnSnapshot[]): void {
-  const playerIdx = game.currentPlayerIndex;
-  const state = encodeState(game, rulesOf(game), playerIdx);
+function takeSnapshot(api: GameAPI, state: GameData, model: NNModel, records: RawRecord[], snapshots: TurnSnapshot[]): void {
+  const playerIdx = state.currentPlayerIndex;
+  const input = encodeState(state, api, playerIdx);
   // fround: keep advantages bit-identical whether trajectories are consumed
   // in memory or after an f32 round-trip through the trajectory store
-  snapshots.push({playerIdx, state, v: Math.fround(model.predict(state).value), recordFrom: records.length});
+  snapshots.push({playerIdx, state: input, v: Math.fround(model.predict(input).value), recordFrom: records.length});
 }
 
 /**
@@ -126,8 +126,8 @@ export function assignAdvantages(records: RawRecord[], snapshots: TurnSnapshot[]
   }
 }
 
-function finishGame(game: GameSystem, records: RawRecord[], snapshots: TurnSnapshot[]): GameResult {
-  return {records, outcomes: computeOutcomes(game), snapshots};
+function finishGame(api: GameAPI, records: RawRecord[], snapshots: TurnSnapshot[]): GameResult {
+  return {records, outcomes: computeOutcomes(api), snapshots};
 }
 
 /**
@@ -136,23 +136,24 @@ function finishGame(game: GameSystem, records: RawRecord[], snapshots: TurnSnaps
  * Records only NN's decisions via TurnOptions.onDecision.
  */
 export function nnVsRandomGame(
-  game: GameSystem, model: NNModel, nnIdx: number, maxTurns: number,
+  api: GameAPI, model: NNModel, nnIdx: number, maxTurns: number,
   temperature: number, epsilon: number,
 ): GameResult {
   const records: RawRecord[] = [];
   const snapshots: TurnSnapshot[] = [];
   const opts = makeRecordingOpts(records, temperature, epsilon);
 
-  for (let turn = 0; turn < maxTurns * 3 && !game.gameOver; turn++) {
-    takeSnapshot(game, model, records, snapshots);
-    if (game.currentPlayerIndex === nnIdx) {
-      executeNNTurn(GameAPI.of(game), model, opts);
+  for (let turn = 0; turn < maxTurns * 3 && !api.isGameOver(); turn++) {
+    const state = api.getState();
+    takeSnapshot(api, state, model, records, snapshots);
+    if (state.currentPlayerIndex === nnIdx) {
+      executeNNTurn(api, model, opts);
     } else {
-      randomTurn(GameAPI.of(game));
+      randomTurn(api);
     }
   }
 
-  return finishGame(game, records, snapshots);
+  return finishGame(api, records, snapshots);
 }
 
 /**
@@ -161,22 +162,22 @@ export function nnVsRandomGame(
  * Records all players' decisions via TurnOptions.onDecision.
  */
 export function nnSelfPlayGame(
-  game: GameSystem, model: NNModel, maxTurns: number,
+  api: GameAPI, model: NNModel, maxTurns: number,
   temperature: number, epsilon: number,
 ): GameResult {
   const records: RawRecord[] = [];
   const snapshots: TurnSnapshot[] = [];
   const opts = makeRecordingOpts(records, temperature, epsilon);
 
-  for (let turn = 0; turn < maxTurns * 3 && !game.gameOver; turn++) {
-    takeSnapshot(game, model, records, snapshots);
-    executeNNTurn(GameAPI.of(game), model, opts);
+  for (let turn = 0; turn < maxTurns * 3 && !api.isGameOver(); turn++) {
+    takeSnapshot(api, api.getState(), model, records, snapshots);
+    executeNNTurn(api, model, opts);
   }
 
-  return finishGame(game, records, snapshots);
+  return finishGame(api, records, snapshots);
 }
 
-export type OpponentFn = (game: GameSystem) => void;
+export type OpponentFn = (api: GameAPI) => void;
 
 /**
  * Play one game: current model vs opponent function.
@@ -184,29 +185,30 @@ export type OpponentFn = (game: GameSystem) => void;
  * Records only current model's decisions.
  */
 export function nnVsOpponentGame(
-  game: GameSystem, model: NNModel, nnIdx: number, opponentFn: OpponentFn,
+  api: GameAPI, model: NNModel, nnIdx: number, opponentFn: OpponentFn,
   maxTurns: number, temperature: number, epsilon: number,
 ): GameResult {
   const records: RawRecord[] = [];
   const snapshots: TurnSnapshot[] = [];
   const opts = makeRecordingOpts(records, temperature, epsilon);
 
-  for (let turn = 0; turn < maxTurns * 3 && !game.gameOver; turn++) {
-    takeSnapshot(game, model, records, snapshots);
-    if (game.currentPlayerIndex === nnIdx) {
-      executeNNTurn(GameAPI.of(game), model, opts);
+  for (let turn = 0; turn < maxTurns * 3 && !api.isGameOver(); turn++) {
+    const state = api.getState();
+    takeSnapshot(api, state, model, records, snapshots);
+    if (state.currentPlayerIndex === nnIdx) {
+      executeNNTurn(api, model, opts);
     } else {
-      opponentFn(game);
+      opponentFn(api);
     }
   }
 
-  return finishGame(game, records, snapshots);
+  return finishGame(api, records, snapshots);
 }
 
-function computeOutcomes(game: GameSystem): number[] {
-  const winner = game.winner?.name ?? "draw";
+function computeOutcomes(api: GameAPI): number[] {
+  const winner = api.getWinner() ?? "draw";
   // fround: see takeSnapshot
-  return game.players.map(p => Math.fround(terminalValue(winner, p)));
+  return api.getState().players.map(p => Math.fround(terminalValue(winner, p)));
 }
 
 /**

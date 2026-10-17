@@ -158,7 +158,7 @@ async function generateVsRandom(name: string, dir: string, opts: Map<string, str
     const game = createRandomizedGame();
     const nnIdx = g % 3;
     const t0 = Date.now();
-    const result = nnVsRandomGame(game, model, nnIdx, MAX_TURNS, temperature, epsilon);
+    const result = nnVsRandomGame(GameAPI.of(game), model, nnIdx, MAX_TURNS, temperature, epsilon);
     writeGameFrame(writer, game, result, {kind: GAME_KIND.vsRandom, nnIdx, opponentId: 0});
     recordOutcome(stats, winnerIndex(game), nnIdx, false, game.turnCount);
     logGame("[vsRand]", g, games, game, result.records.length, ((Date.now() - t0) / 1000).toFixed(1));
@@ -191,9 +191,9 @@ async function generateMixed(name: string, dir: string, opts: Map<string, string
   const {model: phase2Opp, dir: phase2Dir} = await loadModel("phase2");
 
   const opponents: {name: string; fn: OpponentFn; weightsMd5?: string}[] = [
-    {name: "passive", fn: (game) => passiveTurn(GameAPI.of(game))},
-    {name: "phase1", fn: (game) => executeNNTurn(GameAPI.of(game), phase1Opp), weightsMd5: weightsMd5(phase1Dir)},
-    {name: "phase2", fn: (game) => executeNNTurn(GameAPI.of(game), phase2Opp), weightsMd5: weightsMd5(phase2Dir)},
+    {name: "passive", fn: passiveTurn},
+    {name: "phase1", fn: (api) => executeNNTurn(api, phase1Opp), weightsMd5: weightsMd5(phase1Dir)},
+    {name: "phase2", fn: (api) => executeNNTurn(api, phase2Opp), weightsMd5: weightsMd5(phase2Dir)},
   ];
 
   const writer = createTrajectoryWriter(path.join(dir, "trajectories.bin"));
@@ -206,7 +206,7 @@ async function generateMixed(name: string, dir: string, opts: Map<string, string
     // Rotate the opponent every 3 games so every seat faces every opponent
     const oppId = Math.floor(g / 3) % opponents.length;
     const t0 = Date.now();
-    const result = nnVsOpponentGame(game, model, nnIdx, opponents[oppId].fn, MAX_TURNS, temperature, epsilon);
+    const result = nnVsOpponentGame(GameAPI.of(game), model, nnIdx, opponents[oppId].fn, MAX_TURNS, temperature, epsilon);
     writeGameFrame(writer, game, result, {kind: GAME_KIND.vsOpponent, nnIdx, opponentId: oppId});
     recordOutcome(stats, winnerIndex(game), nnIdx, false, game.turnCount);
     logGame(`[${opponents[oppId].name.padEnd(7)}]`, g, gamesOpp, game, result.records.length, ((Date.now() - t0) / 1000).toFixed(1));
@@ -216,7 +216,7 @@ async function generateMixed(name: string, dir: string, opts: Map<string, string
   for (let g = 0; g < gamesSelf; g++) {
     const game = createRandomizedGame();
     const t0 = Date.now();
-    const result = nnSelfPlayGame(game, model, MAX_TURNS, temperature, epsilon);
+    const result = nnSelfPlayGame(GameAPI.of(game), model, MAX_TURNS, temperature, epsilon);
     writeGameFrame(writer, game, result, {kind: GAME_KIND.selfPlay, nnIdx: -1, opponentId: 0});
     recordOutcome(stats, winnerIndex(game), -1, true, game.turnCount);
     logGame("[self   ]", g, gamesSelf, game, result.records.length, ((Date.now() - t0) / 1000).toFixed(1));
