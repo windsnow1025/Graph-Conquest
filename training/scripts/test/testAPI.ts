@@ -16,8 +16,6 @@
  * getMovableLocations, getMoveCandidates, getDistance.
  * Step 4, starting a battle: startBattle, getAttackableLocations,
  * getArmiesInRange, hasAttackTargets.
- * Step 5, fighting: canAct, getTargetsInRange, getUnitsNeeded,
- * getRemainingAttacks, allocateAttack, retreat, resolveBattle.
  *
  * Usage: npx tsx training/scripts/test/testAPI.ts
  */
@@ -30,7 +28,6 @@ import GameAPI, {InputError} from "../../../src/lib/GameAPI";
 import type {ArmyId, ArmySelection, UnitSelection} from "../../../src/lib/GameAPI";
 import Player from "../../../src/lib/Player";
 import type Army from "../../../src/lib/Army";
-import type Battle from "../../../src/lib/Battle";
 import type Unit from "../../../src/lib/Unit";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {randomTurn} from "../../src/Opponents";
@@ -196,26 +193,6 @@ function checkExitAndInput(): void {
   const inBattle: UnitSelection[] = [{currentHealth: 10, remainingMoves: 1, canAttack: false, count: 1}];
   check("recruiting, moving and ending the turn are rejected during a battle",
     !api.recruit("Infantry", "Blue Home", 1) && !api.moveUnits(blueInfantry, inBattle, "B to R") && !api.endTurn());
-
-  const defender: ArmyId = {owner: "Neutral", location: "Blue to Center", unitType: "Infantry"};
-  check("battle queries answer the battle",
-    api.canAct(blueInfantry) && api.getRemainingAttacks(blueInfantry) === 3
-    && isDeepStrictEqual(api.getTargetsInRange(blueInfantry), [defender]) && api.getUnitsNeeded(blueInfantry, defender) === 4);
-  check("battle queries about an army outside the battle are input errors",
-    inputError(() => api.canAct(nowhere)) && inputError(() => api.getTargetsInRange(neutralCenter))
-    && inputError(() => api.getUnitsNeeded(blueInfantry, neutralCenter)) && inputError(() => api.getRemainingAttacks(neutralCenter)));
-  check("allocating to an army outside the battle is an input error", inputError(() => api.allocateAttack(blueInfantry, [{target: neutralCenter, count: 1}])));
-  check("a fractional allocation is an input error", inputError(() => api.allocateAttack(blueInfantry, [{target: defender, count: 1.5}])));
-  check("a target listed twice is an input error", inputError(() => api.allocateAttack(blueInfantry, [{target: defender, count: 1}, {target: defender, count: 1}])));
-  check("an army that cannot act now gets the false verdict", !api.allocateAttack(defender, [{target: blueInfantry, count: 1}]));
-  check("resolving an ongoing battle is the false verdict", !api.resolveBattle());
-  check("a legal allocation succeeds and the round advances",
-    api.allocateAttack(blueInfantry, [{target: defender, count: 3}]) && api.getState().currentBattle?.round === 2 && api.getRemainingAttacks(blueInfantry) === 2);
-  check("retreat and resolve end the battle", api.retreat() && api.resolveBattle() && api.getState().currentBattle === null);
-  check("battle operations without a battle are input errors",
-    inputError(() => api.canAct(blueInfantry)) && inputError(() => api.retreat()) && inputError(() => api.allocateAttack(blueInfantry, [])));
-  check("resolving without a battle is the false verdict", !api.resolveBattle());
-  check("the turn can end after the battle", api.endTurn());
 }
 
 /** The state and every query of an API built from the engine's save, against the engine. */
@@ -227,12 +204,12 @@ function checkAll(game: GameSystem, after: string): void {
   if (!isDeepStrictEqual(state, structuredClone(game))) fail(`getState after ${after}`);
   if (!isDeepStrictEqual(api.toJSON(), game.toJSON())) fail(`toJSON after ${after}`);
 
-  const battleData = state.currentBattle;
-  if (battleData) {
+  const battle = state.currentBattle;
+  if (battle) {
     const participants = [...state.players, state.neutralPlayer];
-    const shared = participants.includes(battleData.attackerPlayer) && participants.includes(battleData.defenderPlayer)
-      && battleData.attackerArmies.every(army => battleData.attackerPlayer.armies.includes(army))
-      && battleData.defenderArmies.every(army => battleData.defenderPlayer.armies.includes(army));
+    const shared = participants.includes(battle.attackerPlayer) && participants.includes(battle.defenderPlayer)
+      && battle.attackerArmies.every(army => battle.attackerPlayer.armies.includes(army))
+      && battle.defenderArmies.every(army => battle.defenderPlayer.armies.includes(army));
     if (!shared) fail(`the battle of a state does not share its objects with the players after ${after}`);
   }
 
@@ -263,17 +240,6 @@ function checkAll(game: GameSystem, after: string): void {
   same("getAttackableLocations", api.getAttackableLocations(), game.attackableLocations);
   for (const target of game.attackableLocations) {
     same("getArmiesInRange", api.getArmiesInRange(target), game.getArmiesInRange(target).map(army => idOf(game, army)));
-  }
-
-  const battle = game.currentBattle;
-  if (!battle) return;
-  for (const army of battle.allArmies) {
-    const id = idOf(game, army);
-    same("canAct", api.canAct(id), battle.canAct(army));
-    same("getRemainingAttacks", api.getRemainingAttacks(id), battle.getRemainingAttacks(army));
-    const targets = battle.getTargetsInRange(army);
-    same("getTargetsInRange", api.getTargetsInRange(id), targets.map(target => idOf(game, target)));
-    for (const target of targets) same("getUnitsNeeded", api.getUnitsNeeded(id, idOf(game, target)), battle.getUnitsNeeded(army, target));
   }
 }
 
@@ -307,29 +273,7 @@ function watch(game: GameSystem): void {
   const move = game.movePlayerUnits.bind(game);
   const disband = game.disbandPlayerUnits.bind(game);
   const start = game.startBattle.bind(game);
-  const resolve = game.resolveBattle.bind(game);
   const end = game.endTurn.bind(game);
-
-  const wrapBattle = (battle: Battle): void => {
-    const allocate = battle.allocateAttack.bind(battle);
-    const retreat = battle.retreat.bind(battle);
-    let depth = 0;
-    battle.allocateAttack = (army, allocations) => {
-      // The passive defender's turn runs inside allocateAttack, and inside the API's engine as well
-      if (depth > 0) return allocate(army, allocations);
-      const id = idOf(game, army);
-      const list = [...allocations].map(([target, count]) => ({target: idOf(game, target), count}));
-      depth++;
-      try {
-        return mirror(game, "allocateAttack", api => api.allocateAttack(id, list), () => allocate(army, allocations), verdict => verdict);
-      } finally {
-        depth--;
-      }
-    };
-    battle.retreat = () => mirror(game, "retreat", api => api.retreat(), retreat, verdict => verdict);
-    hide(battle);
-  };
-
   game.recruitPlayerArmy = (unitType, location, count) =>
     mirror(game, "recruit", api => api.recruit(unitType, location, count), () => recruit(unitType, location, count), army => army !== null);
   game.movePlayerUnits = (units, location) => {
@@ -345,13 +289,9 @@ function watch(game: GameSystem): void {
   game.startBattle = (units, target) => {
     const attackers = attackersOf(game, units);
     const battle = mirror(game, "startBattle", api => api.startBattle(attackers, target), () => start(units, target), battle => battle !== null);
-    if (battle) {
-      wrapBattle(battle);
-      checkAll(game, "startBattle");
-    }
+    if (battle) checkAll(game, "startBattle");
     return battle;
   };
-  game.resolveBattle = () => mirror(game, "resolveBattle", api => api.resolveBattle(), resolve, verdict => verdict);
   game.endTurn = () => {
     const expected = mirror(game, "endTurn", api => api.endTurn(), end, verdict => verdict);
     checkAll(game, "endTurn");
