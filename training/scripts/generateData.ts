@@ -39,7 +39,7 @@ import {encodeState, rulesOf, STATE_SIZE} from "../../src/AI/nn/StateEncoder";
 import {executeNNTurn} from "../../src/AI/TurnExecutor";
 import {passiveTurn, randomTurn} from "../src/Opponents";
 import GameAPI from "../../src/lib/GameAPI";
-import {greedyTurn, daggerTurn, scorePlayer} from "../src/GreedyAI";
+import {greedyTurn, daggerTurn, scorePlayer, constantsOf} from "../src/GreedyAI";
 import {emptySample, terminalValue} from "../src/SampleTypes";
 import type {Sample} from "../src/SampleTypes";
 import {nnVsRandomGame, nnVsOpponentGame, nnSelfPlayGame} from "../src/SelfPlay";
@@ -110,7 +110,7 @@ function winnerIndex(game: GameSystem): number {
 function logGame(prefix: string, g: number, total: number, game: GameSystem, recordCount: number, elapsed: string): void {
   if ((g + 1) % 10 !== 0) return;
   const winner = game.winner?.name ?? "DRAW";
-  const scores = [0, 1, 2].map(i => scorePlayer(game, rulesOf(game), i));
+  const scores = [0, 1, 2].map(i => scorePlayer(GameAPI.of(game), constantsOf(game), i));
   const nodes = game.players.map(p => countNodes(game, p));
   logRaw(
     `  ${prefix} ${String(g + 1).padStart(4)}/${total} ${winner.padEnd(5)} T${String(game.turnCount).padEnd(3)} ` +

@@ -8,10 +8,9 @@ import {nodeFileSystem} from "../../src/nodeIO";
 import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
-import {rulesOf} from "../../../src/AI/nn/StateEncoder";
 import {randomTurn} from "../../src/Opponents";
 import GameAPI from "../../../src/lib/GameAPI";
-import {greedyTurn, scorePlayer} from "../../src/GreedyAI";
+import {greedyTurn, scorePlayer, constantsOf} from "../../src/GreedyAI";
 import {MAX_TURNS, countNodes} from "../../src/trainUtils";
 
 const modelDir = process.argv[2] || "training/model-phase1";
@@ -39,7 +38,7 @@ async function main() {
     }
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-    const scores = [0, 1, 2].map(i => scorePlayer(game, rulesOf(game), i));
+    const scores = [0, 1, 2].map(i => scorePlayer(GameAPI.of(game), constantsOf(game), i));
     const nodes = game.players.map(p => countNodes(game, p));
     const winner = game.winner?.name ?? "draw";
     const nnName = ["Blue", "Red", "Green"][nnIdx];

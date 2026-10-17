@@ -6,11 +6,10 @@ import {setupBackend} from "../../src/setupBackend";
 import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
-import {rulesOf} from "../../../src/AI/nn/StateEncoder";
 import GameAPI from "../../../src/lib/GameAPI";
 import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
-import {greedyTurn, scorePlayer} from "../../src/GreedyAI";
+import {greedyTurn, scorePlayer, constantsOf} from "../../src/GreedyAI";
 import {MODEL_DIR_PHASE2, MAX_TURNS} from "../../src/trainUtils";
 
 const GAMES = 30;
@@ -40,7 +39,7 @@ async function main() {
     else if (winner === nnName) nnWins++;
     else greedyWins++;
 
-    const scores = [0, 1, 2].map(i => scorePlayer(game, rulesOf(game), i));
+    const scores = [0, 1, 2].map(i => scorePlayer(GameAPI.of(game), constantsOf(game), i));
     const result = winner === "draw" ? "DRAW" : winner === nnName ? "NN  " : "GRD ";
     console.log(
       `  ${String(g + 1).padStart(2)}/${GAMES} (NN=${["B","R","G"][nnIdx]}) ${result}: ` +

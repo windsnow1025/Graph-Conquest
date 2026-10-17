@@ -19,13 +19,13 @@ import type GameAPI from "../../src/lib/GameAPI";
 import type {ArmyId, ArmySelection, AttackAllocation} from "../../src/lib/GameAPI";
 import type {GameData} from "../../src/lib/GameSystem";
 import type {ArmyData} from "../../src/lib/Army";
-import type {UnitData} from "../../src/lib/Unit";
+import type {UnitData, UnitStatsMap} from "../../src/lib/Unit";
 import type {BattleData} from "../../src/lib/Battle";
 import {BattlePhase} from "../../src/lib/Battle";
 import {NODE_ORDER, NUM_NODES, UNIT_TYPES} from "../../src/AI/nn/GameIndex";
 import {keyOf, armyIdOf, attackReady, battleUnits, ArmyWalk} from "../../src/AI/nn/Armies";
 import {encodeState, perTypeState} from "../../src/AI/nn/StateEncoder";
-import type {DecisionContext, Rules} from "../../src/AI/nn/StateEncoder";
+import type {DecisionContext} from "../../src/AI/nn/StateEncoder";
 import {
   computeActionTypeMask, executeArmyAction, unitsToCommit,
   ACTION_EXIT, ACTION_MOVE, ACTION_DISBAND,
@@ -66,14 +66,22 @@ export function greedyDefenderPhase(api: GameAPI, battle: BattleData): void {
   simpleBattleAllocate(api, battle, false);
 }
 
-export function scorePlayer(state: GameData, rules: Rules, playerIdx: number): number {
-  const player = state.players[playerIdx];
-  let nodeIncome = 0;
-  for (const [node, {data}] of state.gameMap.nodes) {
-    if (state.nodeOwnership.get(node) === player) nodeIncome += data.income;
-  }
-  const interest = Math.floor(player.money * state.interestRate);
-  const upkeep = rules.getUpkeep(player.name);
+/** The players' names in index order, the interest rate and the unit stats: constant through a game, read once per turn. */
+export interface GameConstants {
+  names: string[];
+  interestRate: number;
+  unitStatsMap: UnitStatsMap;
+}
+
+export function constantsOf(state: GameData): GameConstants {
+  return {names: state.players.map(player => player.name), interestRate: state.interestRate, unitStatsMap: state.unitStatsMap};
+}
+
+export function scorePlayer(api: GameAPI, constants: GameConstants, playerIdx: number): number {
+  const name = constants.names[playerIdx];
+  const nodeIncome = api.getNodeIncome(name);
+  const interest = Math.floor(api.getMoney(name) * constants.interestRate);
+  const upkeep = api.getUpkeep(name);
   return nodeIncome + interest + upkeep;
 }
 
@@ -85,14 +93,13 @@ function normalCDF(x: number): number {
 }
 
 let _cachedTotalIncome = 0;
-function quantile(api: GameAPI, playerIdx: number): number {
-  const state = api.getState();
+function quantile(api: GameAPI, constants: GameConstants, playerIdx: number): number {
   if (_cachedTotalIncome === 0) {
-    for (const [, {data}] of state.gameMap.nodes) {
+    for (const [, {data}] of api.getState().gameMap.nodes) {
       _cachedTotalIncome += data.income;
     }
   }
-  const scores = [0, 1, 2].map(i => scorePlayer(state, api, i));
+  const scores = [0, 1, 2].map(i => scorePlayer(api, constants, i));
   const mean = (scores[0] + scores[1] + scores[2]) / 3;
   return normalCDF((scores[playerIdx] - mean) / _cachedTotalIncome);
 }
@@ -181,7 +188,7 @@ function searchCounts(groups: UnitData[][], evaluate: (counts: number[]) => numb
 
 // ─── Simple greedy (no rollout, used inside rollout) ───
 
-function simpleArmyActions(api: GameAPI, playerIdx: number): void {
+function simpleArmyActions(api: GameAPI, constants: GameConstants, playerIdx: number): void {
   const walk = new ArmyWalk(api, playerIdx);
   for (let next = walk.next(); next; next = walk.next()) {
     const {armyId} = next;
@@ -189,12 +196,12 @@ function simpleArmyActions(api: GameAPI, playerIdx: number): void {
     for (;;) {
       const mask = computeActionTypeMask(api, armyId);
       let bestAction = ACTION_EXIT, bestTarget = 0, bestFractions = FULL_FRACTIONS;
-      let bestQ = quantile(api, playerIdx);
+      let bestQ = quantile(api, constants, playerIdx);
 
       const tryAction = (actionType: number, targetIdx: number, fractions: Float32Array): number => {
         const c = api.fork();
         if (!executeArmyAction(c, armyId, army, actionType, targetIdx, fractions)) return -Infinity;
-        return quantile(c, playerIdx);
+        return quantile(c, constants, playerIdx);
       };
 
       // Moving a part of the reachable units scores the same as moving all of them
@@ -258,7 +265,7 @@ function simpleBattleLoop(api: GameAPI): void {
   }
 }
 
-function simpleBattlePhase(api: GameAPI, playerIdx: number, excludeLocations?: Set<string>): void {
+function simpleBattlePhase(api: GameAPI, constants: GameConstants, playerIdx: number, excludeLocations?: Set<string>): void {
   const visitedNodes = new Set<string>(excludeLocations);
   while (true) {
     const attackable = [...api.getAttackableLocations()].filter(n => !visitedNodes.has(n));
@@ -270,14 +277,14 @@ function simpleBattlePhase(api: GameAPI, playerIdx: number, excludeLocations?: S
       const owner = state.players[playerIdx].name;
       const candidates = armiesInRange(api, state, playerIdx, location);
       if (candidates.length === 0) continue;
-      const qBefore = quantile(api, playerIdx);
+      const qBefore = quantile(api, constants, playerIdx);
 
       const c = api.fork();
       if (!c.startBattle(fullSelections(owner, candidates), location)) continue;
       simpleBattleLoop(c);
       // Rollout: move armies after battle to capture cleared nodes
-      simpleArmyActions(c, playerIdx);
-      if (quantile(c, playerIdx) <= qBefore) continue;
+      simpleArmyActions(c, constants, playerIdx);
+      if (quantile(c, constants, playerIdx) <= qBefore) continue;
 
       const selected = [...candidates];
       for (const army of candidates) {
@@ -286,7 +293,7 @@ function simpleBattlePhase(api: GameAPI, playerIdx: number, excludeLocations?: S
         const cW = api.fork();
         if (!cW.startBattle(fullSelections(owner, without), location)) continue;
         simpleBattleLoop(cW);
-        const qW = quantile(cW, playerIdx);
+        const qW = quantile(cW, constants, playerIdx);
         if (qW >= qBefore) {
           const idx = selected.indexOf(army);
           if (idx >= 0) selected.splice(idx, 1);
@@ -302,20 +309,20 @@ function simpleBattlePhase(api: GameAPI, playerIdx: number, excludeLocations?: S
   }
 }
 
-function simpleRecruit(api: GameAPI, playerIdx: number): void {
+function simpleRecruit(api: GameAPI, constants: GameConstants, playerIdx: number): void {
+  const name = constants.names[playerIdx];
   for (const location of api.getRecruitLocations()) {
     for (const unitType of UNIT_TYPES) {
-      const state = api.getState();
-      const cost = state.unitStatsMap[unitType].cost;
-      const affordable = Math.floor(state.players[playerIdx].money / cost);
+      const cost = constants.unitStatsMap[unitType].cost;
+      const affordable = Math.floor(api.getMoney(name) / cost);
       if (affordable <= 0) continue;
-      let bestFrac = 0, bestQ = quantile(api, playerIdx);
+      let bestFrac = 0, bestQ = quantile(api, constants, playerIdx);
       for (const frac of RECRUIT_LEVELS) {
         const count = Math.round(frac * affordable);
         if (count <= 0 || !api.canBuy(unitType, count)) continue;
         const c = api.fork();
         c.recruit(unitType, location, count);
-        const q = quantile(c, playerIdx);
+        const q = quantile(c, constants, playerIdx);
         if (q > bestQ) { bestQ = q; bestFrac = frac; }
       }
       const count = Math.round(bestFrac * affordable);
@@ -325,25 +332,25 @@ function simpleRecruit(api: GameAPI, playerIdx: number): void {
 }
 
 /** Simulate the player's next turn on a fork: every player passes until the turn comes back, then a full simple turn. */
-function simpleNextTurn(api: GameAPI, playerIdx: number): void {
+function simpleNextTurn(api: GameAPI, constants: GameConstants, playerIdx: number): void {
   if (!api.endTurn()) return;
   if (!passTo(api, playerIdx)) return;
-  simpleArmyActions(api, playerIdx);
-  simpleBattlePhase(api, playerIdx);
-  simpleArmyActions(api, playerIdx);
-  simpleRecruit(api, playerIdx);
+  simpleArmyActions(api, constants, playerIdx);
+  simpleBattlePhase(api, constants, playerIdx);
+  simpleArmyActions(api, constants, playerIdx);
+  simpleRecruit(api, constants, playerIdx);
 }
 
-function simpleRollout(api: GameAPI, playerIdx: number, fromPhase: number, excludeBattleLocations?: Set<string>): void {
-  if (fromPhase <= 1) simpleArmyActions(api, playerIdx);
-  if (fromPhase <= 2) simpleBattlePhase(api, playerIdx, excludeBattleLocations);
-  if (fromPhase <= 3) simpleArmyActions(api, playerIdx);
-  if (fromPhase <= 4) simpleRecruit(api, playerIdx);
+function simpleRollout(api: GameAPI, constants: GameConstants, playerIdx: number, fromPhase: number, excludeBattleLocations?: Set<string>): void {
+  if (fromPhase <= 1) simpleArmyActions(api, constants, playerIdx);
+  if (fromPhase <= 2) simpleBattlePhase(api, constants, playerIdx, excludeBattleLocations);
+  if (fromPhase <= 3) simpleArmyActions(api, constants, playerIdx);
+  if (fromPhase <= 4) simpleRecruit(api, constants, playerIdx);
 }
 
 // ─── Lookahead generators ───
 
-function* lookaheadArmyActions(api: GameAPI, playerIdx: number, samples: Sample[] | null, rolloutFrom = 2, model?: NNModel | null): Generator<void> {
+function* lookaheadArmyActions(api: GameAPI, constants: GameConstants, playerIdx: number, samples: Sample[] | null, rolloutFrom = 2, model?: NNModel | null): Generator<void> {
   const walk = new ArmyWalk(api, playerIdx);
   for (let next = walk.next(); next; next = walk.next()) {
     const {armyId} = next;
@@ -355,16 +362,16 @@ function* lookaheadArmyActions(api: GameAPI, playerIdx: number, samples: Sample[
 
       // EXIT baseline with rollout
       const cExit = api.fork();
-      simpleRollout(cExit, playerIdx, rolloutFrom);
-      let bestQ = quantile(cExit, playerIdx);
+      simpleRollout(cExit, constants, playerIdx, rolloutFrom);
+      let bestQ = quantile(cExit, constants, playerIdx);
       let bestAction = ACTION_EXIT, bestTarget = 0;
       let bestFractions: Float32Array = new Float32Array(NUM_UNIT_GROUPS);
 
       const tryAction = (actionType: number, targetIdx: number, fractions: Float32Array): number => {
         const c = api.fork();
         if (!executeArmyAction(c, armyId, army, actionType, targetIdx, fractions)) return -Infinity;
-        simpleRollout(c, playerIdx, rolloutFrom);
-        return quantile(c, playerIdx);
+        simpleRollout(c, constants, playerIdx, rolloutFrom);
+        return quantile(c, constants, playerIdx);
       };
 
       if (mask[ACTION_MOVE] > 0) {
@@ -442,7 +449,7 @@ function* lookaheadArmyActions(api: GameAPI, playerIdx: number, samples: Sample[
 }
 
 function* lookaheadBattleAllocate(
-  api: GameAPI, battle: BattleData, isAttacker: boolean, playerIdx: number, samples: Sample[] | null,
+  api: GameAPI, constants: GameConstants, battle: BattleData, isAttacker: boolean, playerIdx: number, samples: Sample[] | null,
 ): Generator<void> {
   const owner = (isAttacker ? battle.attackerPlayer : battle.defenderPlayer).name;
   const armies = isAttacker ? battle.attackerArmies : battle.defenderArmies;
@@ -482,8 +489,8 @@ function* lookaheadBattleAllocate(
         if (trial.length > 0) c.allocateAttack(armyId, trial);
         simpleBattleLoop(c);
         // A defender evaluates its own turn: the attacker and anyone between pass first
-        if (isAttacker || passTo(c, playerIdx)) simpleRollout(c, playerIdx, 3);
-        const q = quantile(c, playerIdx);
+        if (isAttacker || passTo(c, playerIdx)) simpleRollout(c, constants, playerIdx, 3);
+        const q = quantile(c, constants, playerIdx);
         if (q > bestQ) { bestQ = q; bestFrac = frac; }
       }
 
@@ -531,7 +538,7 @@ function* lookaheadBattleAllocate(
   }
 }
 
-function* lookaheadBattleLoop(api: GameAPI, playerIdx: number, samples: Sample[] | null): Generator<void> {
+function* lookaheadBattleLoop(api: GameAPI, constants: GameConstants, playerIdx: number, samples: Sample[] | null): Generator<void> {
   let iter = 0;
   for (;;) {
     const state = api.getState();
@@ -542,13 +549,13 @@ function* lookaheadBattleLoop(api: GameAPI, playerIdx: number, samples: Sample[]
       if (battle.actedArmies.size === 0) {
         const cRet = api.fork();
         cRet.retreat();
-        simpleRollout(cRet, playerIdx, 3);
-        const qRetreat = quantile(cRet, playerIdx);
+        simpleRollout(cRet, constants, playerIdx, 3);
+        const qRetreat = quantile(cRet, constants, playerIdx);
 
         const cFight = api.fork();
         simpleBattleLoop(cFight);
-        simpleRollout(cFight, playerIdx, 3);
-        const qFight = quantile(cFight, playerIdx);
+        simpleRollout(cFight, constants, playerIdx, 3);
+        const qFight = quantile(cFight, constants, playerIdx);
 
         const doRetreat = qRetreat > qFight;
 
@@ -572,10 +579,10 @@ function* lookaheadBattleLoop(api: GameAPI, playerIdx: number, samples: Sample[]
           return;
         }
       }
-      yield* lookaheadBattleAllocate(api, battle, true, playerIdx, samples);
+      yield* lookaheadBattleAllocate(api, constants, battle, true, playerIdx, samples);
     } else {
       const defIdx = state.players.indexOf(battle.defenderPlayer);
-      yield* lookaheadBattleAllocate(api, battle, false, defIdx, samples);
+      yield* lookaheadBattleAllocate(api, constants, battle, false, defIdx, samples);
       yield;
     }
   }
@@ -586,14 +593,14 @@ function* lookaheadBattleLoop(api: GameAPI, playerIdx: number, samples: Sample[]
  * with all their attack-ready units when null), then rollout from phase 3.
  * Returns the resulting quantile, or null if the battle cannot start.
  */
-function evalBattle(api: GameAPI, state: GameData, playerIdx: number, location: string, attackers: ArmySelection[] | null): number | null {
+function evalBattle(api: GameAPI, constants: GameConstants, state: GameData, playerIdx: number, location: string, attackers: ArmySelection[] | null): number | null {
   const chosen = attackers ?? fullSelections(state.players[playerIdx].name, armiesInRange(api, state, playerIdx, location));
   if (chosen.length === 0) return null;
   const c = api.fork();
   if (!c.startBattle(chosen, location)) return null;
   simpleBattleLoop(c);
-  simpleRollout(c, playerIdx, 3);
-  return quantile(c, playerIdx);
+  simpleRollout(c, constants, playerIdx, 3);
+  return quantile(c, constants, playerIdx);
 }
 
 /**
@@ -604,7 +611,7 @@ function evalBattle(api: GameAPI, state: GameData, playerIdx: number, location: 
  * DAgger mode).
  */
 function lookaheadSelectArmies(
-  api: GameAPI, state: GameData, playerIdx: number, location: string, targetNodeIdx: number,
+  api: GameAPI, constants: GameConstants, state: GameData, playerIdx: number, location: string, targetNodeIdx: number,
   candidates: ArmyData[], samples: Sample[] | null, model?: NNModel | null,
 ): ArmySelection[] {
   const owner = state.players[playerIdx].name;
@@ -621,7 +628,7 @@ function lookaheadSelectArmies(
       const groups = commitGroups(attackReady(army));
       const result = searchCounts(groups, counts => {
         const units = takeByFractions(groups, countsToFractions(groups, counts), false);
-        return evalBattle(api, state, playerIdx, location, attackersOf(owner, [...selected, [army, units] as const])) ?? -Infinity;
+        return evalBattle(api, constants, state, playerIdx, location, attackersOf(owner, [...selected, [army, units] as const])) ?? -Infinity;
       });
       return {
         q: result ? result.q : -Infinity,
@@ -631,7 +638,7 @@ function lookaheadSelectArmies(
     });
     const optionQ = options.map(o => o.q);
     if (doneIdx >= 0) {
-      optionQ.push(evalBattle(api, state, playerIdx, location, attackersOf(owner, selected)) ?? -Infinity);
+      optionQ.push(evalBattle(api, constants, state, playerIdx, location, attackersOf(owner, selected)) ?? -Infinity);
     }
 
     const labelPick = optionQ.reduce((best, q, i) => (q > optionQ[best] ? i : best), 0);
@@ -682,7 +689,7 @@ function lookaheadSelectArmies(
   return attackersOf(owner, selected);
 }
 
-function* lookaheadBattlePhase(api: GameAPI, playerIdx: number, samples: Sample[] | null, model?: NNModel | null): Generator<void> {
+function* lookaheadBattlePhase(api: GameAPI, constants: GameConstants, playerIdx: number, samples: Sample[] | null, model?: NNModel | null): Generator<void> {
   const fought = new Set<string>();
 
   // Terminates: every iteration either stops or adds a node to `fought`
@@ -693,8 +700,8 @@ function* lookaheadBattlePhase(api: GameAPI, playerIdx: number, samples: Sample[
 
     // Baseline: no battle, rollout from phase 3 (skip battles)
     const cSkip = api.fork();
-    simpleRollout(cSkip, playerIdx, 3);
-    const qSkip = quantile(cSkip, playerIdx);
+    simpleRollout(cSkip, constants, playerIdx, 3);
+    const qSkip = quantile(cSkip, constants, playerIdx);
 
     // Evaluate attacking each candidate node with all in-range armies
     const attackableMask = new Float32Array(NUM_NODES);
@@ -704,7 +711,7 @@ function* lookaheadBattlePhase(api: GameAPI, playerIdx: number, samples: Sample[
       const ni = NODE_ORDER.indexOf(location);
       if (ni < 0) continue;
       attackableMask[ni] = 1;
-      const q = evalBattle(api, state, playerIdx, location, null);
+      const q = evalBattle(api, constants, state, playerIdx, location, null);
       if (q !== null && q > bestQ) { bestQ = q; bestNode = ni; }
     }
     const labelChoice = bestNode >= 0 ? bestNode : BATTLE_TARGET_STOP;
@@ -737,18 +744,18 @@ function* lookaheadBattlePhase(api: GameAPI, playerIdx: number, samples: Sample[
     const candidates = armiesInRange(api, state, playerIdx, location);
     if (candidates.length === 0) continue;
 
-    const attackers = lookaheadSelectArmies(api, state, playerIdx, location, execChoice, candidates, samples, model);
+    const attackers = lookaheadSelectArmies(api, constants, state, playerIdx, location, execChoice, candidates, samples, model);
     if (attackers.length === 0) continue;
 
     if (!api.startBattle(attackers, location)) continue;
     // Run entire battle synchronously (no yield) to prevent UI from taking control
-    const battleGen = lookaheadBattleLoop(api, playerIdx, samples);
+    const battleGen = lookaheadBattleLoop(api, constants, playerIdx, samples);
     while (!battleGen.next().done) { /* drain */ }
     yield; // UI: battle resolved
   }
 }
 
-function* lookaheadRecruit(api: GameAPI, playerIdx: number, samples: Sample[] | null, model?: NNModel | null): Generator<void> {
+function* lookaheadRecruit(api: GameAPI, constants: GameConstants, playerIdx: number, samples: Sample[] | null, model?: NNModel | null): Generator<void> {
   for (const location of api.getRecruitLocations()) {
     const locIdx = NODE_ORDER.indexOf(location);
     if (locIdx < 0) continue;
@@ -759,15 +766,15 @@ function* lookaheadRecruit(api: GameAPI, playerIdx: number, samples: Sample[] | 
       if (affordable <= 0) continue;
       let bestFrac = 0;
       const cBase = api.fork();
-      simpleNextTurn(cBase, playerIdx);
-      let bestQ = quantile(cBase, playerIdx);
+      simpleNextTurn(cBase, constants, playerIdx);
+      let bestQ = quantile(cBase, constants, playerIdx);
       for (const frac of RECRUIT_LEVELS) {
         const count = Math.round(frac * affordable);
         if (count <= 0 || !api.canBuy(unitType, count)) continue;
         const c = api.fork();
         c.recruit(unitType, location, count);
-        simpleNextTurn(c, playerIdx);
-        const q = quantile(c, playerIdx);
+        simpleNextTurn(c, constants, playerIdx);
+        const q = quantile(c, constants, playerIdx);
         if (q > bestQ) { bestQ = q; bestFrac = frac; }
       }
 
@@ -800,17 +807,18 @@ export function* greedyTurnSteps(api: GameAPI, samples?: Sample[]): Generator<vo
   const state = api.getState();
   const playerIdx = state.currentPlayerIndex;
   if (state.players[playerIdx].defeated || api.getWinner() !== null) { api.endTurn(); return; }
+  const constants = constantsOf(state);
   const s = samples ?? null;
 
   // A loaded save can carry an in-progress battle; finish it before the phases
   if (api.hasBattle()) {
-    yield* lookaheadBattleLoop(api, playerIdx, s);
+    yield* lookaheadBattleLoop(api, constants, playerIdx, s);
   }
 
-  yield* lookaheadArmyActions(api, playerIdx, s);
-  yield* lookaheadBattlePhase(api, playerIdx, s);
-  yield* lookaheadArmyActions(api, playerIdx, s, 4);
-  yield* lookaheadRecruit(api, playerIdx, s);
+  yield* lookaheadArmyActions(api, constants, playerIdx, s);
+  yield* lookaheadBattlePhase(api, constants, playerIdx, s);
+  yield* lookaheadArmyActions(api, constants, playerIdx, s, 4);
+  yield* lookaheadRecruit(api, constants, playerIdx, s);
 
   api.endTurn();
 }
@@ -831,12 +839,13 @@ export function daggerTurn(api: GameAPI, model: NNModel, samples: Sample[]): voi
   const state = api.getState();
   const playerIdx = state.currentPlayerIndex;
   if (state.players[playerIdx].defeated || api.getWinner() !== null) { api.endTurn(); return; }
+  const constants = constantsOf(state);
 
   const gen = (function* () {
-    yield* lookaheadArmyActions(api, playerIdx, samples, 2, model);
-    yield* lookaheadBattlePhase(api, playerIdx, samples, model);
-    yield* lookaheadArmyActions(api, playerIdx, samples, 4, model);
-    yield* lookaheadRecruit(api, playerIdx, samples, model);
+    yield* lookaheadArmyActions(api, constants, playerIdx, samples, 2, model);
+    yield* lookaheadBattlePhase(api, constants, playerIdx, samples, model);
+    yield* lookaheadArmyActions(api, constants, playerIdx, samples, 4, model);
+    yield* lookaheadRecruit(api, constants, playerIdx, samples, model);
   })();
   while (!gen.next().done) { /* drain */ }
 

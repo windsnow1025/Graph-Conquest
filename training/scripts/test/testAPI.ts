@@ -19,6 +19,7 @@
  * Step 5, fighting: hasBattle, canAct, getTargetsInRange, getUnitsNeeded,
  * getRemainingAttacks, allocateAttack, retreat.
  * Step 6, the fork: fork.
+ * Step 7, the player's economy: getMoney, getNodeIncome.
  *
  * Usage: npx tsx training/scripts/test/testAPI.ts
  */
@@ -137,6 +138,8 @@ function checkExitAndInput(): void {
   check("canBuy with a fractional count is an input error", inputError(() => api.canBuy("Infantry", 1.5)));
   check("canBuy answers the rule", api.canBuy("Infantry", 1) && !api.canBuy("Infantry", 1000));
   check("getUpkeep of an unknown player is an input error", inputError(() => api.getUpkeep("Nobody")));
+  check("getMoney of an unknown player is an input error", inputError(() => api.getMoney("Nobody")));
+  check("getNodeIncome of an unknown player is an input error", inputError(() => api.getNodeIncome("Nobody")));
   check("a legal recruit succeeds and shows in the state", api.recruit("Infantry", "Blue Home", 5) && api.getState().players[0].armies[0].units.length === 5);
 
   const blueInfantry: ArmyId = {owner: "Blue", location: "Blue Home", unitType: "Infantry"};
@@ -235,6 +238,8 @@ function checkAll(game: GameSystem, after: string): void {
   same("getWinner", api.getWinner(), game.winner?.name ?? null);
   same("isGameOver", api.isGameOver(), game.gameOver);
   for (const player of game.allPlayers) same("getUpkeep", api.getUpkeep(player.name), game.getUpkeep(player));
+  for (const player of game.allPlayers) same("getMoney", api.getMoney(player.name), player.money);
+  for (const player of game.allPlayers) same("getNodeIncome", api.getNodeIncome(player.name), game.getNodeIncome(player));
   same("getRecruitLocations", api.getRecruitLocations(), game.recruitLocations);
   for (const unitType of Object.keys(game.unitStatsMap)) {
     for (const count of [1, 7, 1000]) same("canBuy", api.canBuy(unitType, count), game.currentPlayer.canBuy(unitType, count));
