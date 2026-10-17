@@ -14,6 +14,8 @@
  * canBuy, isGameOver, getWinner, getUpkeep.
  * Step 3, the army identifier and unit selection: moveUnits, disbandUnits,
  * getMovableLocations, getMoveCandidates, getDistance.
+ * Step 4, starting a battle: startBattle, getAttackableLocations,
+ * getArmiesInRange, hasAttackTargets.
  *
  * Usage: npx tsx training/scripts/test/testAPI.ts
  */
@@ -23,7 +25,7 @@ import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import GameSystem from "../../../src/lib/GameSystem";
 import GameAPI, {InputError} from "../../../src/lib/GameAPI";
-import type {ArmyId, UnitSelection} from "../../../src/lib/GameAPI";
+import type {ArmyId, ArmySelection, UnitSelection} from "../../../src/lib/GameAPI";
 import Player from "../../../src/lib/Player";
 import type Army from "../../../src/lib/Army";
 import type Unit from "../../../src/lib/Unit";
@@ -75,6 +77,18 @@ function idOf(game: GameSystem, army: Army): ArmyId {
 /** The army of the current player that holds the units a consumer moves or disbands. */
 function armyOf(game: GameSystem, units: Unit[]): Army {
   return game.currentPlayer.getArmyOf(units[0])!;
+}
+
+/** The unit list a consumer passes to startBattle, as one army with its selections per army, in order of first appearance. */
+function attackersOf(game: GameSystem, units: Unit[]): ArmySelection[] {
+  const unitsByArmy = new Map<Army, Unit[]>();
+  for (const unit of units) {
+    const army = game.currentPlayer.getArmyOf(unit)!;
+    const armyUnits = unitsByArmy.get(army);
+    if (armyUnits) armyUnits.push(unit);
+    else unitsByArmy.set(army, [unit]);
+  }
+  return [...unitsByArmy].map(([army, armyUnits]) => ({army: idOf(game, army), selections: selectionOf(armyUnits)}));
 }
 
 /** The unit list a consumer passes to the engine, as one state and count per state, in order of first appearance. */
@@ -137,13 +151,13 @@ function checkExitAndInput(): void {
   const neutralCenter: ArmyId = {owner: "Neutral", location: "Center", unitType: "Infantry"};
   const nowhere: ArmyId = {owner: "Blue", location: "Nowhere", unitType: "Infantry"};
   const recruited = (count: number): UnitSelection[] => [{currentHealth: 10, remainingMoves: 0, canAttack: false, count}];
-  const oneMover: UnitSelection[] = [{currentHealth: 10, remainingMoves: 1, canAttack: true, count: 1}];
+  const ready = (count: number): UnitSelection[] => [{currentHealth: 10, remainingMoves: 1, canAttack: true, count}];
   const armed = JSON.stringify(api.toJSON());
   check("an unknown army is an input error", inputError(() => api.moveUnits(nowhere, recruited(1), "Blue to Center")));
   check("an unknown owner is an input error", inputError(() => api.disbandUnits({...blueInfantry, owner: "Nobody"}, recruited(1))));
   check("an unknown destination is an input error", inputError(() => api.moveUnits(blueInfantry, recruited(1), "Nowhere")));
   check("a selection with a fractional count is an input error", inputError(() => api.disbandUnits(blueInfantry, [{...recruited(1)[0], count: 1.5}])));
-  check("a state no unit is in is an input error", inputError(() => api.disbandUnits(blueInfantry, oneMover)));
+  check("a state no unit is in is an input error", inputError(() => api.disbandUnits(blueInfantry, ready(1))));
   check("more units than the army has in that state is an input error", inputError(() => api.disbandUnits(blueInfantry, recruited(6))));
   check("a state selected twice is an input error", inputError(() => api.disbandUnits(blueInfantry, [...recruited(1), ...recruited(1)])));
   check("an army of another player is an input error", inputError(() => api.moveUnits(neutralCenter, recruited(1), "Blue to Center")) && inputError(() => api.disbandUnits(neutralCenter, recruited(1))));
@@ -158,6 +172,27 @@ function checkExitAndInput(): void {
   check("getDistance with an unknown node is an input error", inputError(() => api.getDistance("Nowhere", "Center")));
   check("a legal disband by state and count succeeds", api.disbandUnits(blueInfantry, recruited(2)) && api.getState().players[0].armies[0].units.length === 3);
   check("endTurn passes the turn", api.endTurn() && api.getState().currentPlayerIndex === 1);
+
+  check("after a round the turn is Blue's again", api.endTurn() && api.endTurn() && api.getState().currentPlayerIndex === 0);
+  check("getAttackableLocations answers a Set of the enemy nodes in range",
+    api.getAttackableLocations() instanceof Set && api.getAttackableLocations().has("Blue to Center") && !api.getAttackableLocations().has("Center"));
+  check("getArmiesInRange names the armies", isDeepStrictEqual(api.getArmiesInRange("Blue to Center"), [blueInfantry]) && api.getArmiesInRange("Center").length === 0);
+  check("hasAttackTargets answers the rule", api.hasAttackTargets(blueInfantry));
+  check("battle queries with unknown or foreign input are input errors",
+    inputError(() => api.getArmiesInRange("Nowhere")) && inputError(() => api.hasAttackTargets(nowhere)) && inputError(() => api.hasAttackTargets(neutralCenter)));
+  const attackers = (count: number): ArmySelection[] => [{army: blueInfantry, selections: ready(count)}];
+  const beforeBattle = JSON.stringify(api.toJSON());
+  check("starting a battle with an unknown army is an input error", inputError(() => api.startBattle([{army: nowhere, selections: ready(1)}], "Blue to Center")));
+  check("starting a battle at an unknown location is an input error", inputError(() => api.startBattle(attackers(1), "Nowhere")));
+  check("an army listed twice is an input error", inputError(() => api.startBattle([...attackers(1), ...attackers(1)], "Blue to Center")));
+  check("a battle without attackers is the false verdict", !api.startBattle([], "Blue to Center"));
+  check("a battle at a node without an enemy is the false verdict", !api.startBattle(attackers(1), "Blue Home"));
+  check("a battle out of range is the false verdict", !api.startBattle(attackers(1), "Center"));
+  check("input errors and rejections leave the state untouched", JSON.stringify(api.toJSON()) === beforeBattle);
+  check("a legal battle starts and shows in the state", api.startBattle(attackers(3), "Blue to Center") && api.getState().currentBattle?.attackerArmies.length === 1);
+  const inBattle: UnitSelection[] = [{currentHealth: 10, remainingMoves: 1, canAttack: false, count: 1}];
+  check("recruiting, moving and ending the turn are rejected during a battle",
+    !api.recruit("Infantry", "Blue Home", 1) && !api.moveUnits(blueInfantry, inBattle, "B to R") && !api.endTurn());
 }
 
 /** The state and every query of an API built from the engine's save, against the engine. */
@@ -191,6 +226,7 @@ function checkAll(game: GameSystem, after: string): void {
     const id = idOf(game, army);
     const movable = army.getMovableLocations(game.gameMap, enemyLocations);
     same("getMovableLocations", api.getMovableLocations(id), movable);
+    same("hasAttackTargets", api.hasAttackTargets(id), game.hasAttackTargets(army));
     for (const destination of movable) {
       same("getMoveCandidates", api.getMoveCandidates(id, destination), structuredClone(army.getMoveCandidates(destination, game.gameMap, enemyLocations)));
     }
@@ -200,6 +236,10 @@ function checkAll(game: GameSystem, after: string): void {
   const nodes = [...game.gameMap.nodes.keys()];
   for (const from of nodes.slice(0, 3)) {
     for (const to of nodes) same("getDistance", api.getDistance(from, to), game.gameMap.getDistance(from, to));
+  }
+  same("getAttackableLocations", api.getAttackableLocations(), game.attackableLocations);
+  for (const target of game.attackableLocations) {
+    same("getArmiesInRange", api.getArmiesInRange(target), game.getArmiesInRange(target).map(army => idOf(game, army)));
   }
 }
 
@@ -247,7 +287,8 @@ function watch(game: GameSystem): void {
     return mirror(game, "disbandUnits", api => api.disbandUnits(id, selection), () => disband(units), verdict => verdict);
   };
   game.startBattle = (units, target) => {
-    const battle = start(units, target);
+    const attackers = attackersOf(game, units);
+    const battle = mirror(game, "startBattle", api => api.startBattle(attackers, target), () => start(units, target), battle => battle !== null);
     if (battle) checkAll(game, "startBattle");
     return battle;
   };
