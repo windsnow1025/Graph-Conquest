@@ -1,13 +1,12 @@
 /**
  * Conformance of GameAPI with the engine, grown with the API one step at a
  * time: each step adds the checks of what it added. Seeded games are played
- * on the engine as in traceCore.ts. At the start of every game, after every
- * turn and at every battle start, a GameAPI built from the engine's save is
- * compared with the engine; every command of the engine that the API offers
- * is also issued on a GameAPI built from the engine's save just before the
- * engine executes it, and the verdicts and the saves are compared. A first
- * section checks the exit, the input errors and the verdicts on the default
- * configuration.
+ * on the API as in traceCore.ts. At the start of every game, after every
+ * turn and at every battle start, an engine built from the API's save is
+ * compared with the API; every command issued to the API is also issued on
+ * an engine built from the API's save just before, and the verdicts and the
+ * saves are compared. A first section checks the exit, the input errors and
+ * the verdicts on the default configuration.
  *
  * Step 1, the boundary: create, fromJSON, toJSON, getState.
  * Step 2, the turn and recruitment: endTurn, recruit, getRecruitLocations,
@@ -36,8 +35,7 @@ import type Unit from "../../../src/lib/Unit";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {randomTurn} from "../../src/Opponents";
 import {greedyTurn} from "../../src/GreedyAI";
-import {createRandomizedConfig, seededRandom} from "../../src/trainUtils";
-import {selectionsOf} from "../../../src/AI/nn/UnitGroups";
+import {createRandomizedGame, seededRandom} from "../../src/trainUtils";
 import {isDeepStrictEqual} from "util";
 import * as path from "path";
 
@@ -79,21 +77,15 @@ function idOf(game: GameSystem, army: Army): ArmyId {
   return {owner: owner.name, location: army.location, unitType: army.unitType};
 }
 
-/** The army of the current player that holds the units a consumer moves or disbands. */
-function armyOf(game: GameSystem, units: Unit[]): Army {
-  return game.currentPlayer.getArmyOf(units[0])!;
+/** The engine's army an identifier names. */
+function armyOf(game: GameSystem, id: ArmyId): Army {
+  return game.allPlayers.find(player => player.name === id.owner)!.getArmy(id.location, id.unitType)!;
 }
 
-/** The unit list a consumer passes to startBattle, as one army with its selections per army, in order of first appearance. */
-function attackersOf(game: GameSystem, units: Unit[]): ArmySelection[] {
-  const unitsByArmy = new Map<Army, Unit[]>();
-  for (const unit of units) {
-    const army = game.currentPlayer.getArmyOf(unit)!;
-    const armyUnits = unitsByArmy.get(army);
-    if (armyUnits) armyUnits.push(unit);
-    else unitsByArmy.set(army, [unit]);
-  }
-  return [...unitsByArmy].map(([army, armyUnits]) => ({army: idOf(game, army), selections: selectionsOf(armyUnits)}));
+/** The engine's units a selection names: of each state, the first `count` units in army order, as the API selects them. */
+function unitsOf(army: Army, selections: UnitSelection[]): Unit[] {
+  return selections.flatMap(({currentHealth, remainingMoves, canAttack, count}) =>
+    army.units.filter(unit => unit.currentHealth === currentHealth && unit.remainingMoves === remainingMoves && unit.canAttack === canAttack).slice(0, count));
 }
 
 /** The exit, the input errors and the verdicts, on the default configuration. */
@@ -216,10 +208,10 @@ function checkExitAndInput(): void {
   check("a fork hides its engine too", fork.game === undefined);
 }
 
-/** The state and every query of an API built from the engine's save, against the engine. */
-function checkAll(game: GameSystem, after: string): void {
+/** The state and every query of the API, against an engine built from its save. */
+function checkAll(api: GameAPI, after: string): void {
   stats.checks++;
-  const api = GameAPI.fromJSON(game.toJSON());
+  const game = GameSystem.fromJSON(api.toJSON());
   const state = api.getState();
   if (state instanceof GameSystem || state.players[0] instanceof Player) fail(`getState returned a live object after ${after}`);
   if (!isDeepStrictEqual(state, structuredClone(game))) fail(`getState after ${after}`);
@@ -280,69 +272,50 @@ function checkAll(game: GameSystem, after: string): void {
 }
 
 /**
- * Issues a command on an API built from the engine's save, then runs it on the
- * engine, and compares the verdicts and the saves. Returns the engine's result.
+ * Issues a command on an engine built from the API's save, then on the API,
+ * and compares the verdicts and the saves. Returns the API's verdict.
  */
-function mirror<T>(game: GameSystem, command: string, onApi: (api: GameAPI) => boolean, onEngine: () => T, verdictOf: (result: T) => boolean): T {
+function mirror(api: GameAPI, command: string, onEngine: (game: GameSystem) => boolean, onApi: () => boolean): boolean {
   stats.commands++;
-  const api = GameAPI.fromJSON(game.toJSON());
-  const actual = onApi(api);
-  const result = onEngine();
-  const expected = verdictOf(result);
+  const game = GameSystem.fromJSON(api.toJSON());
+  const expected = onEngine(game);
+  const actual = onApi();
   if (!expected) stats.rejected++;
   if (actual !== expected) fail(`verdict of ${command}: engine ${expected}, api ${actual}`);
   if (JSON.stringify(api.toJSON()) !== JSON.stringify(game.toJSON())) fail(`state after ${command}`);
-  return result;
+  return actual;
 }
 
-/** The wrappers of watch() are own properties of the engine; non-enumerable, they stay out of the engine's cloned state. */
-function hide(target: object): void {
-  for (const [key, value] of Object.entries(target)) {
-    if (typeof value === "function") Object.defineProperty(target, key, {enumerable: false});
-  }
-}
-
-/** Mirrors the commands the API offers and checks the state and the queries at every check point. */
-function watch(game: GameSystem): void {
+/** The API with its commands mirrored on the engine and the state and the queries checked at every check point. */
+function watch(api: GameAPI): GameAPI {
   stats.games++;
-  const recruit = game.recruitPlayerArmy.bind(game);
-  const move = game.movePlayerUnits.bind(game);
-  const disband = game.disbandPlayerUnits.bind(game);
-  const start = game.startBattle.bind(game);
-  const allocate = game.allocateAttack.bind(game);
-  const retreat = game.retreat.bind(game);
-  const end = game.endTurn.bind(game);
-  game.recruitPlayerArmy = (unitType, location, count) =>
-    mirror(game, "recruit", api => api.recruit(unitType, location, count), () => recruit(unitType, location, count), army => army !== null);
-  game.movePlayerUnits = (units, location) => {
-    const id = idOf(game, armyOf(game, units));
-    const selection = selectionsOf(units);
-    return mirror(game, "moveUnits", api => api.moveUnits(id, selection, location), () => move(units, location), verdict => verdict);
+  const commands: Pick<GameAPI, "recruit" | "moveUnits" | "disbandUnits" | "startBattle" | "allocateAttack" | "retreat" | "endTurn"> = {
+    recruit: (unitType, location, count) =>
+      mirror(api, "recruit", game => game.recruitPlayerArmy(unitType, location, count) !== null, () => api.recruit(unitType, location, count)),
+    moveUnits: (armyId, selections, destination) =>
+      mirror(api, "moveUnits", game => game.movePlayerUnits(unitsOf(armyOf(game, armyId), selections), destination), () => api.moveUnits(armyId, selections, destination)),
+    disbandUnits: (armyId, selections) =>
+      mirror(api, "disbandUnits", game => game.disbandPlayerUnits(unitsOf(armyOf(game, armyId), selections)), () => api.disbandUnits(armyId, selections)),
+    startBattle: (attackers, target) => {
+      const started = mirror(api, "startBattle",
+        game => game.startBattle(attackers.flatMap(attacker => unitsOf(armyOf(game, attacker.army), attacker.selections)), target) !== null,
+        () => api.startBattle(attackers, target));
+      if (started) checkAll(api, "startBattle");
+      return started;
+    },
+    allocateAttack: (armyId, allocations) =>
+      mirror(api, "allocateAttack",
+        game => game.allocateAttack(armyOf(game, armyId), new Map(allocations.map(allocation => [armyOf(game, allocation.target), allocation.count]))),
+        () => api.allocateAttack(armyId, allocations)),
+    retreat: () => mirror(api, "retreat", game => game.retreat(), () => api.retreat()),
+    endTurn: () => {
+      const ended = mirror(api, "endTurn", game => game.endTurn(), () => api.endTurn());
+      checkAll(api, "endTurn");
+      return ended;
+    },
   };
-  game.disbandPlayerUnits = (units) => {
-    const id = idOf(game, armyOf(game, units));
-    const selection = selectionsOf(units);
-    return mirror(game, "disbandUnits", api => api.disbandUnits(id, selection), () => disband(units), verdict => verdict);
-  };
-  game.startBattle = (units, target) => {
-    const attackers = attackersOf(game, units);
-    const battle = mirror(game, "startBattle", api => api.startBattle(attackers, target), () => start(units, target), battle => battle !== null);
-    if (battle) checkAll(game, "startBattle");
-    return battle;
-  };
-  game.allocateAttack = (army, allocations) => {
-    const id = idOf(game, army);
-    const list = [...allocations].map(([target, count]) => ({target: idOf(game, target), count}));
-    return mirror(game, "allocateAttack", api => api.allocateAttack(id, list), () => allocate(army, allocations), verdict => verdict);
-  };
-  game.retreat = () => mirror(game, "retreat", api => api.retreat(), retreat, verdict => verdict);
-  game.endTurn = () => {
-    const expected = mirror(game, "endTurn", api => api.endTurn(), end, verdict => verdict);
-    checkAll(game, "endTurn");
-    return expected;
-  };
-  hide(game);
-  checkAll(game, "start");
+  checkAll(api, "start");
+  return new Proxy(api, {get: (target, key) => (key in commands ? commands[key as keyof typeof commands] : Reflect.get(target, key))});
 }
 
 async function main() {
@@ -351,27 +324,24 @@ async function main() {
   await setupBackend();
   Math.random = seededRandom(SEED);
   for (let g = 0; g < RANDOM_GAMES; g++) {
-    const game = new GameSystem(createRandomizedConfig());
-    watch(game);
-    while (!game.gameOver) randomTurn(GameAPI.of(game));
+    const api = watch(createRandomizedGame());
+    while (!api.isGameOver()) randomTurn(api);
   }
   console.log(`random games: ${JSON.stringify(stats)}`);
 
   for (let g = 0; g < GREEDY_GAMES; g++) {
-    const game = new GameSystem(createRandomizedConfig());
-    watch(game);
-    while (!game.gameOver) {
-      if (game.currentPlayerIndex === g % 3) greedyTurn(GameAPI.of(game));
-      else randomTurn(GameAPI.of(game));
+    const api = watch(createRandomizedGame());
+    while (!api.isGameOver()) {
+      if (api.getState().currentPlayerIndex === g % 3) greedyTurn(api);
+      else randomTurn(api);
     }
   }
   console.log(`greedy games: ${JSON.stringify(stats)}`);
 
   const model = new NNModel();
   await model.load(nodeFileSystem(path.resolve("public/model")));
-  const game = new GameSystem(DefaultConfig);
-  watch(game);
-  while (!game.gameOver) executeNNTurn(GameAPI.of(game), model);
+  const api = watch(GameAPI.create(DefaultConfig));
+  while (!api.isGameOver()) executeNNTurn(api, model);
   model.dispose();
   console.log(`NN game:      ${JSON.stringify(stats)}`);
   console.log("=== PASS ===");
