@@ -25,7 +25,7 @@ import {NODE_ORDER, NUM_NODES, UNIT_TYPES} from "../../src/AI/nn/GameIndex";
 import {encodeState, perTypeState, rulesOf} from "../../src/AI/nn/StateEncoder";
 import type {DecisionContext} from "../../src/AI/nn/StateEncoder";
 import {
-  computeActionTypeMask, executeArmyAction, unitsToCommit,
+  computeActionTypeMaskOnEngine, executeArmyActionOnEngine, unitsToCommitOnEngine,
   ACTION_EXIT, ACTION_MOVE, ACTION_DISBAND,
 } from "../../src/AI/nn/ActionSpace";
 import {
@@ -194,14 +194,14 @@ function simpleArmyActions(game: GameSystem, playerIdx: number): void {
     if (processed.has(army)) { ai++; continue; }
     processed.add(army);
     for (;;) {
-      const mask = computeActionTypeMask(game, army);
+      const mask = computeActionTypeMaskOnEngine(game, army);
       const armyIdx = player.armies.indexOf(army);
       let bestAction = ACTION_EXIT, bestTarget = 0, bestFractions = FULL_FRACTIONS;
       let bestQ = quantile(game, playerIdx);
 
       const tryAction = (actionType: number, targetIdx: number, fractions: Float32Array): number => {
         const c = cloneGame(game);
-        if (!executeArmyAction(c, c.players[playerIdx].armies[armyIdx], actionType, targetIdx, fractions)) return -Infinity;
+        if (!executeArmyActionOnEngine(c, c.players[playerIdx].armies[armyIdx], actionType, targetIdx, fractions)) return -Infinity;
         return quantile(c, playerIdx);
       };
 
@@ -221,7 +221,7 @@ function simpleArmyActions(game: GameSystem, playerIdx: number): void {
       }
 
       if (bestAction === ACTION_EXIT) break;
-      if (!executeArmyAction(game, army, bestAction, bestTarget, bestFractions)) break;
+      if (!executeArmyActionOnEngine(game, army, bestAction, bestTarget, bestFractions)) break;
       const newIdx = player.armies.indexOf(army); if (newIdx < 0) break; ai = newIdx;
     }
     const finalIdx = player.armies.indexOf(army);
@@ -372,7 +372,7 @@ function* lookaheadArmyActions(game: GameSystem, playerIdx: number, samples: Sam
     if (processed.has(army)) { ai++; continue; }
     processed.add(army);
     for (;;) {
-      const mask = computeActionTypeMask(game, army);
+      const mask = computeActionTypeMaskOnEngine(game, army);
       const disbandMask = groupMask(disbandGroups(army.units));
       const armyIdx = player.armies.indexOf(army);
 
@@ -385,7 +385,7 @@ function* lookaheadArmyActions(game: GameSystem, playerIdx: number, samples: Sam
 
       const tryAction = (actionType: number, targetIdx: number, fractions: Float32Array): number => {
         const c = cloneGame(game);
-        if (!executeArmyAction(c, c.players[playerIdx].armies[armyIdx], actionType, targetIdx, fractions)) return -Infinity;
+        if (!executeArmyActionOnEngine(c, c.players[playerIdx].armies[armyIdx], actionType, targetIdx, fractions)) return -Infinity;
         simpleRollout(c, playerIdx, rolloutFrom);
         return quantile(c, playerIdx);
       };
@@ -455,7 +455,7 @@ function* lookaheadArmyActions(game: GameSystem, playerIdx: number, samples: Sam
       }
 
       if (execAction === ACTION_EXIT) break;
-      if (!executeArmyAction(game, army, execAction, execTarget, execFractions)) break;
+      if (!executeArmyActionOnEngine(game, army, execAction, execTarget, execFractions)) break;
       yield; // UI update after each action
       const newIdx = player.armies.indexOf(army); if (newIdx < 0) break; ai = newIdx;
     }
@@ -705,7 +705,7 @@ function lookaheadSelectArmies(
 
     if (execPick === doneIdx || execFractions === null) break;
     const army = remaining[execPick];
-    selected.set(army, unitsToCommit(army, execFractions));
+    selected.set(army, unitsToCommitOnEngine(army, execFractions));
     remaining.splice(execPick, 1);
   }
 

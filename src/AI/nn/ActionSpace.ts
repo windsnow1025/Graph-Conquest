@@ -12,9 +12,12 @@
  */
 import type GameSystem from "../../lib/GameSystem";
 import type Army from "../../lib/Army";
+import type {ArmyData} from "../../lib/Army";
 import type Unit from "../../lib/Unit";
+import type GameAPI from "../../lib/GameAPI";
+import type {ArmyId, UnitSelection} from "../../lib/GameAPI";
 import {NODE_ORDER} from "./GameIndex";
-import {moveGroups, commitGroups, disbandGroups, takeByFractions} from "./UnitGroups";
+import {moveGroups, commitGroups, disbandGroups, takeByFractions, selectionsOf} from "./UnitGroups";
 
 // ─── Action type constants ───
 
@@ -28,17 +31,17 @@ export const ACTION_NAMES = ["EXIT", "MOVE", "DISBAND"];
 // ─── Action type mask ───
 
 /**
- * Compute legal action type mask for an army.
+ * Compute legal action type mask for an army of the current player.
  * Returns Float32Array[3]: 1.0 = legal, 0.0 = illegal.
  */
-export function computeActionTypeMask(game: GameSystem, army: Army): Float32Array {
+export function computeActionTypeMask(api: GameAPI, armyId: ArmyId): Float32Array {
   const mask = new Float32Array(NUM_ACTION_TYPES);
 
   // EXIT is always legal
   mask[ACTION_EXIT] = 1;
 
   // MOVE: some unit can reach some node
-  if (army.getMovableLocations(game.gameMap, game.enemyLocations).length > 0) mask[ACTION_MOVE] = 1;
+  if (api.getMovableLocations(armyId).length > 0) mask[ACTION_MOVE] = 1;
 
   // DISBAND: an army always has units
   mask[ACTION_DISBAND] = 1;
@@ -46,31 +49,58 @@ export function computeActionTypeMask(game: GameSystem, army: Army): Float32Arra
   return mask;
 }
 
+// Transitional, until every runner holds a GameAPI
+export function computeActionTypeMaskOnEngine(game: GameSystem, army: Army): Float32Array {
+  const mask = new Float32Array(NUM_ACTION_TYPES);
+  mask[ACTION_EXIT] = 1;
+  if (army.getMovableLocations(game.gameMap, game.enemyLocations).length > 0) mask[ACTION_MOVE] = 1;
+  mask[ACTION_DISBAND] = 1;
+  return mask;
+}
+
 // ─── Fractions to units ───
 
-/** The units that move to the target node under per-move-group fractions. */
-function unitsToMove(game: GameSystem, army: Army, targetNode: string, fractions: ArrayLike<number>): Unit[] {
-  return takeByFractions(moveGroups(army.getMoveCandidates(targetNode, game.gameMap, game.enemyLocations)), fractions, false);
-}
-
 /** The attack-ready units committed to a battle under per-commit-group fractions. */
-export function unitsToCommit(army: Army, fractions: ArrayLike<number>): Unit[] {
-  return takeByFractions(commitGroups(army.attackCandidates), fractions, false);
+export function unitsToCommit(army: ArmyData, fractions: ArrayLike<number>): UnitSelection[] {
+  return selectionsOf(takeByFractions(commitGroups(army.units.filter(unit => unit.canAttack)), fractions, false));
 }
 
-/** The units disbanded under per-disband-group fractions. */
-function unitsToDisband(army: Army, fractions: ArrayLike<number>): Unit[] {
-  return takeByFractions(disbandGroups(army.units), fractions, true);
+// Transitional, until every runner holds a GameAPI
+export function unitsToCommitOnEngine(army: Army, fractions: ArrayLike<number>): Unit[] {
+  return takeByFractions(commitGroups(army.attackCandidates), fractions, false);
 }
 
 // ─── Action execution ───
 
 /**
- * Execute an army action. `fractions` is per move group for MOVE and per
+ * Execute an action of an army of the current player, named by its identifier and
+ * given with its current data. `fractions` is per move group for MOVE and per
  * disband group for DISBAND.
  * Returns true if the action was successfully executed, false otherwise.
  */
 export function executeArmyAction(
+  api: GameAPI,
+  armyId: ArmyId,
+  army: ArmyData,
+  actionType: number,
+  targetNodeIdx: number,
+  fractions: ArrayLike<number>,
+): boolean {
+  if (actionType === ACTION_MOVE) {
+    const targetNode = NODE_ORDER[targetNodeIdx];
+    const candidates = api.getMoveCandidates(armyId, targetNode);
+    return api.moveUnits(armyId, selectionsOf(takeByFractions(moveGroups(candidates), fractions, false)), targetNode);
+  }
+
+  if (actionType === ACTION_DISBAND) {
+    return api.disbandUnits(armyId, selectionsOf(takeByFractions(disbandGroups(army.units), fractions, true)));
+  }
+
+  return false;
+}
+
+// Transitional, until every runner holds a GameAPI
+export function executeArmyActionOnEngine(
   game: GameSystem,
   army: Army,
   actionType: number,
@@ -79,11 +109,12 @@ export function executeArmyAction(
 ): boolean {
   if (actionType === ACTION_MOVE) {
     const targetNode = NODE_ORDER[targetNodeIdx];
-    return game.movePlayerUnits(unitsToMove(game, army, targetNode, fractions), targetNode);
+    const candidates = army.getMoveCandidates(targetNode, game.gameMap, game.enemyLocations);
+    return game.movePlayerUnits(takeByFractions(moveGroups(candidates), fractions, false), targetNode);
   }
 
   if (actionType === ACTION_DISBAND) {
-    return game.disbandPlayerUnits(unitsToDisband(army, fractions));
+    return game.disbandPlayerUnits(takeByFractions(disbandGroups(army.units), fractions, true));
   }
 
   return false;

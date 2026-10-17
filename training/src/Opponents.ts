@@ -17,7 +17,7 @@ import {BattlePhase, BattleResult} from "../../src/lib/Battle";
 import type Battle from "../../src/lib/Battle";
 import {calculateUnitsNeeded} from "../../src/lib/Combat";
 import {NODE_ORDER, UNIT_TYPES} from "../../src/AI/nn/GameIndex";
-import {computeActionTypeMask, executeArmyAction, ACTION_EXIT, ACTION_MOVE} from "../../src/AI/nn/ActionSpace";
+import {computeActionTypeMaskOnEngine, executeArmyActionOnEngine, ACTION_EXIT, ACTION_MOVE} from "../../src/AI/nn/ActionSpace";
 import {NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS} from "../../src/AI/nn/UnitGroups";
 import {battleStuckReport} from "../../src/AI/battleReport";
 
@@ -46,7 +46,7 @@ function randomArmyActions(game: GameSystem): void {
 
     for (;;) {
       // Random action type from legal options
-      const mask = computeActionTypeMask(game, army);
+      const mask = computeActionTypeMaskOnEngine(game, army);
       const legal = [...mask.keys()].filter(a => mask[a] > 0);
       const actionType = legal[Math.floor(Math.random() * legal.length)];
       if (actionType === ACTION_EXIT) break;
@@ -61,7 +61,7 @@ function randomArmyActions(game: GameSystem): void {
         fractions = randomFractions(NUM_MOVE_GROUPS);
       }
 
-      if (!executeArmyAction(game, army, actionType, targetIdx, fractions)) break;
+      if (!executeArmyActionOnEngine(game, army, actionType, targetIdx, fractions)) break;
 
       const newIdx = player.armies.indexOf(army);
       if (newIdx < 0) break;

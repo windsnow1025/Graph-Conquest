@@ -34,7 +34,7 @@ import {NODE_ORDER, NUM_NODES, UNIT_TYPES} from "./nn/GameIndex";
 import {encodeState, perTypeState, rulesOf} from "./nn/StateEncoder";
 import type {DecisionContext} from "./nn/StateEncoder";
 import {
-  computeActionTypeMask, executeArmyAction, unitsToCommit,
+  computeActionTypeMaskOnEngine, executeArmyActionOnEngine, unitsToCommitOnEngine,
   ACTION_EXIT, ACTION_MOVE, ACTION_DISBAND,
 } from "./nn/ActionSpace";
 import {NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS, moveGroups, commitGroups, disbandGroups, groupMask} from "./nn/UnitGroups";
@@ -131,7 +131,7 @@ function* armyActionsPhase(
     processed.add(army);
 
     for (;;) {
-      const actionMask = computeActionTypeMask(game, army);
+      const actionMask = computeActionTypeMaskOnEngine(game, army);
       const disbandMask = groupMask(disbandGroups(army.units));
       const context: DecisionContext = {type: "army", army, actionTypeMask: actionMask, disbandMask};
       const state = encodeState(game, rulesOf(game), playerIdx, context);
@@ -170,7 +170,7 @@ function* armyActionsPhase(
           explored: count.explored});
       }
 
-      if (!executeArmyAction(game, army, actionType, targetIdx, fractions)) break;
+      if (!executeArmyActionOnEngine(game, army, actionType, targetIdx, fractions)) break;
 
       const newIdx = player.armies.indexOf(army);
       if (newIdx < 0) break;
@@ -343,7 +343,7 @@ function selectBattleArmies(
     });
 
     if (!chosen.army || !commit) break;
-    selected.set(chosen.army, unitsToCommit(chosen.army, commit.value));
+    selected.set(chosen.army, unitsToCommitOnEngine(chosen.army, commit.value));
     remaining.splice(remaining.indexOf(chosen.army), 1);
   }
 
