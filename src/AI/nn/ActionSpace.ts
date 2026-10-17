@@ -15,8 +15,10 @@ import type Army from "../../lib/Army";
 import type {ArmyData} from "../../lib/Army";
 import type Unit from "../../lib/Unit";
 import type GameAPI from "../../lib/GameAPI";
-import type {ArmyId, UnitSelection} from "../../lib/GameAPI";
+import type {ArmyId} from "../../lib/GameAPI";
+import type {UnitData} from "../../lib/Unit";
 import {NODE_ORDER} from "./GameIndex";
+import {attackReady} from "./Armies";
 import {moveGroups, commitGroups, disbandGroups, takeByFractions, selectionsOf} from "./UnitGroups";
 
 // ─── Action type constants ───
@@ -61,8 +63,8 @@ export function computeActionTypeMaskOnEngine(game: GameSystem, army: Army): Flo
 // ─── Fractions to units ───
 
 /** The attack-ready units committed to a battle under per-commit-group fractions. */
-export function unitsToCommit(army: ArmyData, fractions: ArrayLike<number>): UnitSelection[] {
-  return selectionsOf(takeByFractions(commitGroups(army.units.filter(unit => unit.canAttack)), fractions, false));
+export function unitsToCommit(army: ArmyData, fractions: ArrayLike<number>): UnitData[] {
+  return takeByFractions(commitGroups(attackReady(army)), fractions, false);
 }
 
 // Transitional, until every runner holds a GameAPI

@@ -29,6 +29,7 @@ import type {UnitData} from "../../lib/Unit";
 import type GameAPI from "../../lib/GameAPI";
 import type {DefaultUnitName} from "../../lib/data/DefaultUnitStatsMap.ts";
 import {NODE_ORDER, NUM_NODES, UNIT_TYPES, NUM_UNIT_TYPES} from "./GameIndex";
+import {battleUnits} from "./Armies";
 import {NUM_UNIT_GROUPS, NUM_MOVE_GROUPS, NUM_COMMIT_GROUPS, NUM_DISBAND_GROUPS, groupCounts} from "./UnitGroups";
 import {NUM_ACTION_TYPES} from "./ActionSpace";
 
@@ -454,15 +455,15 @@ export function encodeState(
     offset = encodeArmyLocation(buf, offset, army);
     offset = encodeArmyType(buf, offset, army);
     const armyCost = state.unitStatsMap[army.unitType].cost;
-    const battleUnits = army.units.filter(unit => unit.inBattle);
-    buf[offset++] = battleUnits.length / (100 / armyCost);
+    const armyUnits = battleUnits(army);
+    buf[offset++] = armyUnits.length / (100 / armyCost);
     buf[offset++] = context.remaining / (100 / armyCost);
-    buf[offset++] = encodeUnitsHp(battleUnits);
+    buf[offset++] = encodeUnitsHp(armyUnits);
     const enemy = context.enemyArmy;
     offset = encodeArmyLocation(buf, offset, enemy);
     offset = encodeArmyType(buf, offset, enemy);
     const enemyCost = state.unitStatsMap[enemy.unitType].cost;
-    const enemyUnits = enemy.units.filter(unit => unit.inBattle);
+    const enemyUnits = battleUnits(enemy);
     buf[offset++] = enemyUnits.length / (100 / enemyCost);
     buf[offset++] = encodeUnitsHp(enemyUnits);
     buf[offset++] = context.attackProgress;

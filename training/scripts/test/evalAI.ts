@@ -87,7 +87,7 @@ function runGame(
     const playerIdx = game.currentPlayerIndex;
 
     if (playerIdx === nnPlayerIdx) {
-      executeNNTurn(game, model);
+      executeNNTurn(GameAPI.of(game), model);
     } else {
       switch (opponentType) {
         case "random": randomTurn(GameAPI.of(game)); break;

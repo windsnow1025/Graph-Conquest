@@ -194,7 +194,7 @@ async function main() {
 
   const game = createRandomizedGame();
   for (let turn = 0; turn < 40 * 3 && !game.gameOver; turn++) {
-    if (game.currentPlayerIndex === 0) executeNNTurn(game, m2);
+    if (game.currentPlayerIndex === 0) executeNNTurn(GameAPI.of(game), m2);
     else randomTurn(GameAPI.of(game));
   }
   log(`  Game finished: winner=${game.winner?.name ?? "none (turn cap)"} T${game.turnCount}`);

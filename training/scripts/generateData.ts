@@ -192,8 +192,8 @@ async function generateMixed(name: string, dir: string, opts: Map<string, string
 
   const opponents: {name: string; fn: OpponentFn; weightsMd5?: string}[] = [
     {name: "passive", fn: (game) => passiveTurn(GameAPI.of(game))},
-    {name: "phase1", fn: (game) => executeNNTurn(game, phase1Opp), weightsMd5: weightsMd5(phase1Dir)},
-    {name: "phase2", fn: (game) => executeNNTurn(game, phase2Opp), weightsMd5: weightsMd5(phase2Dir)},
+    {name: "phase1", fn: (game) => executeNNTurn(GameAPI.of(game), phase1Opp), weightsMd5: weightsMd5(phase1Dir)},
+    {name: "phase2", fn: (game) => executeNNTurn(GameAPI.of(game), phase2Opp), weightsMd5: weightsMd5(phase2Dir)},
   ];
 
   const writer = createTrajectoryWriter(path.join(dir, "trajectories.bin"));
@@ -342,7 +342,7 @@ async function generateStalemate(name: string, dir: string, opts: Map<string, st
     const nnIdx = played % 3;
     const t0 = Date.now();
     while (!game.gameOver && game.turnCount < from) {
-      if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model);
+      if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model);
       else randomTurn(GameAPI.of(game));
     }
     if (game.gameOver) continue;

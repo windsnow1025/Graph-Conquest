@@ -11,11 +11,12 @@
  * - random: coin flip at every decision point
  */
 import type GameAPI from "../../src/lib/GameAPI";
-import type {ArmyId, ArmySelection, AttackAllocation} from "../../src/lib/GameAPI";
+import type {ArmySelection, AttackAllocation} from "../../src/lib/GameAPI";
 import type {ArmyData} from "../../src/lib/Army";
 import type {BattleData} from "../../src/lib/Battle";
 import {BattlePhase} from "../../src/lib/Battle";
 import {NODE_ORDER, UNIT_TYPES} from "../../src/AI/nn/GameIndex";
+import {keyOf, armyIdOf, attackReady, battleUnits} from "../../src/AI/nn/Armies";
 import {computeActionTypeMask, executeArmyAction, ACTION_EXIT, ACTION_MOVE} from "../../src/AI/nn/ActionSpace";
 import {NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, selectionsOf} from "../../src/AI/nn/UnitGroups";
 import {battleStuckReport} from "../../src/AI/battleReport";
@@ -30,15 +31,6 @@ export function passiveTurn(api: GameAPI): void {
 
 function randomFractions(length: number): Float32Array {
   return Float32Array.from({length}, () => Math.random());
-}
-
-/** An army of a player is one per node and unit type, so the two name it within the player. */
-function keyOf(army: {location: string; unitType: string}): string {
-  return `${army.location}|${army.unitType}`;
-}
-
-function armyIdOf(owner: string, army: ArmyData): ArmyId {
-  return {owner, location: army.location, unitType: army.unitType};
 }
 
 /** The current player's name and armies, read anew from the game. */
@@ -109,7 +101,7 @@ function randomBattleAllocate(api: GameAPI, battle: BattleData, isAttacker: bool
 
     const targets = api.getTargetsInRange(armyId);
 
-    let remaining = army.units.filter(unit => unit.inBattle).length;
+    let remaining = battleUnits(army).length;
     const allocations: AttackAllocation[] = [];
 
     for (const target of targets) {
@@ -176,7 +168,7 @@ function randomBattlePhase(api: GameAPI): void {
       for (const army of armies) {
         if (!candidates.has(keyOf(army))) continue;
         if (Math.random() < 0.6) {
-          attackers.push({army: armyIdOf(owner, army), selections: selectionsOf(army.units.filter(unit => unit.canAttack))});
+          attackers.push({army: armyIdOf(owner, army), selections: selectionsOf(attackReady(army))});
         }
       }
       if (attackers.length === 0) continue;

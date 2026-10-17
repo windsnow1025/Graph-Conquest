@@ -1,5 +1,6 @@
 import type GameSystem from "../lib/GameSystem";
 import type Battle from "../lib/Battle";
+import GameAPI from "../lib/GameAPI";
 import {executeNNTurnSteps, executeNNDefenderPhase} from "./TurnExecutor";
 import {NNModel} from "./nn/NNModel";
 import {WEB_MODEL_FILE, webModelHandler} from "./nn/WebModel";
@@ -34,7 +35,7 @@ export async function aiTurnSteps(game: GameSystem): Promise<Generator<void> | n
     game.endTurn();
     return null;
   }
-  return executeNNTurnSteps(game, await loadModel());
+  return executeNNTurnSteps(GameAPI.of(game), await loadModel());
 }
 
 export function greedyTurnStepsUI(game: GameSystem): Generator<void> | null {
@@ -49,6 +50,6 @@ export async function aiDefenderPhase(game: GameSystem, battle: Battle, mode: st
   if (mode === "greedy") {
     greedyDefenderPhase(game, battle);
   } else {
-    executeNNDefenderPhase(game, await loadModel(), battle);
+    executeNNDefenderPhase(GameAPI.of(game), await loadModel(), battle);
   }
 }

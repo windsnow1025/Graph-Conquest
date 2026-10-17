@@ -28,7 +28,7 @@ async function main() {
     const game = new GameSystem(DefaultConfig);
     const nnIdx = g % 3;
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model);
+      if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model);
       else randomTurn(GameAPI.of(game));
     }
     const scores = [0, 1, 2].map(i => scorePlayer(game, i));

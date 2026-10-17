@@ -278,7 +278,7 @@ export async function testNNvsRandom(modelDir: string, games: number = TEST_GAME
     const game = createRandomizedGame();
     const nnIdx = g % 3;
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, testModel);
+      if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), testModel);
       else randomTurn(GameAPI.of(game));
     }
     const scores = [0, 1, 2].map(i => scorePlayer(game, i));

@@ -68,7 +68,7 @@ async function main() {
   const game = new GameSystem(DefaultConfig);
   while (!game.gameOver) {
     const turn = game.turnCount, playerIdx = game.currentPlayerIndex;
-    executeNNTurn(game, model);
+    executeNNTurn(GameAPI.of(game), model);
     console.log(turnLine("N", game, turn, playerIdx));
   }
   console.log(endLine("N", game));

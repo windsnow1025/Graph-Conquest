@@ -366,7 +366,7 @@ async function main() {
   await model.load(nodeFileSystem(path.resolve("public/model")));
   const game = new GameSystem(DefaultConfig);
   watch(game);
-  while (!game.gameOver) executeNNTurn(game, model);
+  while (!game.gameOver) executeNNTurn(GameAPI.of(game), model);
   model.dispose();
   console.log(`NN game:      ${JSON.stringify(stats)}`);
   console.log("=== PASS ===");

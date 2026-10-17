@@ -55,7 +55,7 @@ async function runGame(model: NNModel, maxTurns: number, gameIndex: number): Pro
 
     // Blue = NN, Red/Green = random opponent
     if (player.name === "Blue") {
-      executeNNTurn(game, model);
+      executeNNTurn(GameAPI.of(game), model);
     } else {
       randomTurn(GameAPI.of(game));
     }

@@ -39,7 +39,7 @@ async function main() {
         handoffs++;
         console.log(`Game ${g + 1}/${numGames} (${self.name}): handoff at T${game.turnCount}, units=${self.armies.reduce((s, a) => s + a.units.length, 0)} nodes=${countNodes(game, self)} money=${self.money}`);
       }
-      if (handedOff) greedyTurn(game); else executeNNTurn(game, model);
+      if (handedOff) greedyTurn(game); else executeNNTurn(GameAPI.of(game), model);
     }
     const winner = game.winner?.name ?? "draw";
     const won = winner === self.name;

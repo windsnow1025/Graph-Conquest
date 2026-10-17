@@ -64,7 +64,7 @@ async function evaluateValueHead(label: string, modelDir: string) {
     };
 
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model, opts);
+      if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model, opts);
       else randomTurn(GameAPI.of(game));
     }
 

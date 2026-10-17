@@ -76,7 +76,7 @@ async function main() {
           money: self.money, maxFeature: 0, actions: {}, moves: 0, battles: 0, stops: 0,
           enemyEmptyReachable: enemyEmptyReachable(game, nnIdx),
         };
-        executeNNTurn(game, model, opts);
+        executeNNTurn(GameAPI.of(game), model, opts);
         history.push(current);
         current = null;
       } else {

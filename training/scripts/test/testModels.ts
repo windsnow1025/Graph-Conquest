@@ -25,7 +25,7 @@ async function testVsRandom(label: string, model: NNModel) {
     const game = createRandomizedGame();
     const nnIdx = g % 3;
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model);
+      if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model);
       else randomTurn(GameAPI.of(game));
     }
     const winner = game.winner?.name ?? "draw";
@@ -69,7 +69,7 @@ async function testThreeWay(models: {label: string; model: NNModel}[]) {
 
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
       const modelIdx = arr[game.currentPlayerIndex];
-      executeNNTurn(game, models[modelIdx].model);
+      executeNNTurn(GameAPI.of(game), models[modelIdx].model);
     }
 
     const winner = game.winner?.name ?? "draw";

@@ -19,25 +19,26 @@
  *   Phase 4: Recruitment
  *   endTurn
  */
-import type GameSystem from "../lib/GameSystem";
-import type Army from "../lib/Army";
-import type Unit from "../lib/Unit";
-import type Battle from "../lib/Battle";
-import {BattlePhase, BattleResult} from "../lib/Battle";
-import {calculateUnitsNeeded} from "../lib/Combat";
+import type GameAPI from "../lib/GameAPI";
+import type {ArmySelection, AttackAllocation} from "../lib/GameAPI";
+import type {ArmyData} from "../lib/Army";
+import type {UnitData} from "../lib/Unit";
+import type {BattleData} from "../lib/Battle";
+import {BattlePhase} from "../lib/Battle";
 import type {NNModel, NNPrediction} from "./nn/NNModel";
 import {
   applyMaskAndSoftmax, softmax, argmax, expectedFractions, groupLogits, sampleFromProbs, BATTLE_TARGET_DIM, BATTLE_TARGET_STOP,
 } from "./nn/NNModel";
 import {battleStuckReport} from "./battleReport";
 import {NODE_ORDER, NUM_NODES, UNIT_TYPES} from "./nn/GameIndex";
-import {encodeState, perTypeState, rulesOf} from "./nn/StateEncoder";
+import {keyOf, armyIdOf, attackReady, battleUnits} from "./nn/Armies";
+import {encodeState, perTypeState} from "./nn/StateEncoder";
 import type {DecisionContext} from "./nn/StateEncoder";
 import {
-  computeActionTypeMaskOnEngine, executeArmyActionOnEngine, unitsToCommitOnEngine,
+  computeActionTypeMask, executeArmyAction, unitsToCommit,
   ACTION_EXIT, ACTION_MOVE, ACTION_DISBAND,
 } from "./nn/ActionSpace";
-import {NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS, moveGroups, commitGroups, disbandGroups, groupMask} from "./nn/UnitGroups";
+import {NUM_MOVE_GROUPS, NUM_DISBAND_GROUPS, NUM_COMMIT_GROUPS, moveGroups, commitGroups, disbandGroups, groupMask, selectionsOf} from "./nn/UnitGroups";
 import {FRACTION_BINS, binToFraction} from "./nn/FractionBins";
 
 // ─── Turn options (exploration + recording) ───
@@ -116,30 +117,35 @@ function chooseFractions(logits: Float32Array, groups: number, temp: number, eps
 // ─── Phase 1 & 3: Army actions ───
 
 // Terminates without a step budget: every MOVE spends at least one move point
-// and every DISBAND removes at least one unit.
+// and every DISBAND removes at least one unit. The name of an army whose units
+// have all left is forgotten, so an army that forms again at that node acts
+// like the new army it is.
 function* armyActionsPhase(
-  game: GameSystem, model: NNModel, playerIdx: number, opts: TurnOptions,
+  api: GameAPI, model: NNModel, playerIdx: number, opts: TurnOptions,
 ): Generator<void> {
-  const player = game.players[playerIdx];
-  const processed = new Set<Army>();
+  let state = api.getState();
+  const owner = state.players[playerIdx].name;
+  const processed = new Set<string>();
   const temp = opts.temperature ?? 0;
   const eps = opts.epsilon ?? 0;
   let ai = 0;
-  while (ai < player.armies.length) {
-    const army = player.armies[ai];
-    if (processed.has(army)) { ai++; continue; }
-    processed.add(army);
+  while (ai < state.players[playerIdx].armies.length) {
+    const key = keyOf(state.players[playerIdx].armies[ai]);
+    if (processed.has(key)) { ai++; continue; }
+    processed.add(key);
+    const armyId = armyIdOf(owner, state.players[playerIdx].armies[ai]);
 
     for (;;) {
-      const actionMask = computeActionTypeMaskOnEngine(game, army);
+      const army = state.players[playerIdx].armies[ai];
+      const actionMask = computeActionTypeMask(api, armyId);
       const disbandMask = groupMask(disbandGroups(army.units));
       const context: DecisionContext = {type: "army", army, actionTypeMask: actionMask, disbandMask};
-      const state = encodeState(game, rulesOf(game), playerIdx, context);
-      const pred = model.predict(state);
+      const input = encodeState(state, api, playerIdx, context);
+      const pred = model.predict(input);
 
       const {choice: actionType, explored: actionExplored} = chooseAction(pred.actionTypeLogits, actionMask, temp, eps);
       const disband = chooseFractions(pred.disbandFractionLogits, NUM_DISBAND_GROUPS, temp, eps);
-      opts.onDecision?.({playerIdx, state, pred, action: {type: "army", actionType, disbandFraction: disband.value},
+      opts.onDecision?.({playerIdx, state: input, pred, action: {type: "army", actionType, disbandFraction: disband.value},
         explored: actionExplored || (actionType === ACTION_DISBAND && disband.explored)});
       if (actionType === ACTION_EXIT) break;
 
@@ -147,38 +153,43 @@ function* armyActionsPhase(
       let fractions = disband.value;
       if (actionType === ACTION_MOVE) {
         const legalMask = new Float32Array(NUM_NODES);
-        for (const dest of army.getMovableLocations(game.gameMap, game.enemyLocations)) {
+        for (const dest of api.getMovableLocations(armyId)) {
           legalMask[NODE_ORDER.indexOf(dest)] = 1;
         }
         const moveContext: DecisionContext = {type: "moveTarget", army, legalMask};
-        const moveState = encodeState(game, rulesOf(game), playerIdx, moveContext);
-        const movePred = model.predict(moveState);
+        const moveInput = encodeState(state, api, playerIdx, moveContext);
+        const movePred = model.predict(moveInput);
         const move = chooseAction(movePred.moveTargetLogits, legalMask, temp, eps);
         targetIdx = move.choice;
-        opts.onDecision?.({playerIdx, state: moveState, pred: movePred, action: {type: "moveTarget", moveTarget: targetIdx},
+        opts.onDecision?.({playerIdx, state: moveInput, pred: movePred, action: {type: "moveTarget", moveTarget: targetIdx},
           explored: move.explored});
 
-        const candidates = army.getMoveCandidates(NODE_ORDER[targetIdx], game.gameMap, game.enemyLocations);
+        const candidates = api.getMoveCandidates(armyId, NODE_ORDER[targetIdx]);
         const countContext: DecisionContext = {
           type: "moveCount", army, destinationIdx: targetIdx, groupMask: groupMask(moveGroups(candidates)),
         };
-        const countState = encodeState(game, rulesOf(game), playerIdx, countContext);
-        const countPred = model.predict(countState);
+        const countInput = encodeState(state, api, playerIdx, countContext);
+        const countPred = model.predict(countInput);
         const count = chooseFractions(countPred.moveFractionLogits, NUM_MOVE_GROUPS, temp, eps);
         fractions = count.value;
-        opts.onDecision?.({playerIdx, state: countState, pred: countPred, action: {type: "moveCount", moveFraction: fractions},
+        opts.onDecision?.({playerIdx, state: countInput, pred: countPred, action: {type: "moveCount", moveFraction: fractions},
           explored: count.explored});
       }
 
-      if (!executeArmyActionOnEngine(game, army, actionType, targetIdx, fractions)) break;
+      if (!executeArmyAction(api, armyId, army, actionType, targetIdx, fractions)) break;
 
-      const newIdx = player.armies.indexOf(army);
+      state = api.getState();
+      const armies = state.players[playerIdx].armies;
+      for (const name of processed) {
+        if (!armies.some(a => keyOf(a) === name)) processed.delete(name);
+      }
+      const newIdx = armies.findIndex(a => keyOf(a) === key);
       if (newIdx < 0) break;
       ai = newIdx;
       yield;
     }
 
-    const finalIdx = player.armies.indexOf(army);
+    const finalIdx = state.players[playerIdx].armies.findIndex(a => keyOf(a) === key);
     ai = finalIdx < 0 ? ai : finalIdx + 1;
   }
 }
@@ -186,40 +197,48 @@ function* armyActionsPhase(
 // ─── Phase 2: Battle loop ───
 
 function* battleAllocatePhase(
-  game: GameSystem, model: NNModel, battle: Battle,
+  api: GameAPI, model: NNModel, battle: BattleData,
   playerIdx: number, isAttacker: boolean, opts: TurnOptions,
 ): Generator<void> {
+  const owner = (isAttacker ? battle.attackerPlayer : battle.defenderPlayer).name;
   const armies = isAttacker ? battle.attackerArmies : battle.defenderArmies;
   const temp = opts.temperature ?? 0;
   const eps = opts.epsilon ?? 0;
 
-  for (const army of [...armies]) {
-    if (!battle.canAct(army)) continue;
-    if (battle.result !== BattleResult.Ongoing) return;
+  for (const army of armies) {
+    const state = api.getState();
+    const current = state.currentBattle;
+    if (!current) return;
+    const armyId = armyIdOf(owner, army);
+    if (!api.canAct(armyId)) continue;
 
-    const targets = battle.getTargetsInRange(army);
+    const enemyOwner = (isAttacker ? current.defenderPlayer : current.attackerPlayer).name;
+    const enemies = isAttacker ? current.defenderArmies : current.attackerArmies;
+    const targetKeys = new Set(api.getTargetsInRange(armyId).map(keyOf));
+    const targets = enemies.filter(enemy => targetKeys.has(keyOf(enemy)));
+    const unitsNeeded = (target: ArmyData): number => api.getUnitsNeeded(armyId, armyIdOf(enemyOwner, target));
 
-    let remaining = army.battleUnits.length;
-    const allocations = new Map<Army, number>();
+    let remaining = battleUnits(army).length;
+    const allocations: AttackAllocation[] = [];
 
     for (let ti = 0; ti < targets.length; ti++) {
       if (remaining <= 0) break;
       const target = targets[ti];
-      const killNeeded = calculateUnitsNeeded(army, target);
+      const killNeeded = unitsNeeded(target);
       const futureNeeded = targets.slice(ti + 1)
-        .reduce((sum, t) => sum + calculateUnitsNeeded(army, t), 0);
+        .reduce((sum, t) => sum + unitsNeeded(t), 0);
 
       const context: DecisionContext = {
         type: "battleAllocate", army, remaining, enemyArmy: target,
-        attackProgress: 1 - battle.getRemainingAttacks(army) / battle.maxArmyAttacks, isAttacker, unitsNeeded: killNeeded,
+        attackProgress: 1 - api.getRemainingAttacks(armyId) / current.maxArmyAttacks, isAttacker, unitsNeeded: killNeeded,
       };
-      const state = encodeState(game, rulesOf(game), playerIdx, context);
-      const pred = model.predict(state);
+      const input = encodeState(state, api, playerIdx, context);
+      const pred = model.predict(input);
 
       const kfChoice = chooseFractions(pred.killFractionLogits, 1, temp, eps);
       const kf = kfChoice.value[0];
 
-      opts.onDecision?.({playerIdx, state, pred, action: {type: "battleAllocate", killFraction: kf}, explored: kfChoice.explored});
+      opts.onDecision?.({playerIdx, state: input, pred, action: {type: "battleAllocate", killFraction: kf}, explored: kfChoice.explored});
 
       if (futureNeeded < remaining) {
         const overflowPct = Math.min(1, (remaining - futureNeeded) / killNeeded);
@@ -227,14 +246,14 @@ function* battleAllocatePhase(
           // NN under-allocating — force full allocation to this and all remaining targets
           const send = Math.min(killNeeded, remaining);
           if (send > 0) {
-            allocations.set(target, send);
+            allocations.push({target: armyIdOf(enemyOwner, target), count: send});
             remaining -= send;
           }
           for (let tj = ti + 1; tj < targets.length; tj++) {
             if (remaining <= 0) break;
-            const futureSend = Math.min(calculateUnitsNeeded(army, targets[tj]), remaining);
+            const futureSend = Math.min(unitsNeeded(targets[tj]), remaining);
             if (futureSend > 0) {
-              allocations.set(targets[tj], futureSend);
+              allocations.push({target: armyIdOf(enemyOwner, targets[tj]), count: futureSend});
               remaining -= futureSend;
             }
           }
@@ -245,49 +264,52 @@ function* battleAllocatePhase(
       let unitCount = Math.round(kf * killNeeded);
       unitCount = Math.min(unitCount, remaining);
       if (unitCount > 0) {
-        allocations.set(target, unitCount);
+        allocations.push({target: armyIdOf(enemyOwner, target), count: unitCount});
         remaining -= unitCount;
       }
     }
 
     // Always submit (empty = pass): marks the army acted so the phase can end.
     // A rejection here means an invariant broke; failing loud beats spinning forever.
-    if (!game.allocateAttack(army, allocations)) {
+    if (!api.allocateAttack(armyId, allocations)) {
       throw new Error(battleStuckReport(
-        `battleAllocatePhase: allocation rejected (${army.unitType}@${army.location}, ${allocations.size} allocs)`, battle));
+        `battleAllocatePhase: allocation rejected (${army.unitType}@${army.location}, ${allocations.length} allocs)`, current));
     }
     yield;
   }
 }
 
 function* battleLoop(
-  game: GameSystem, model: NNModel, battle: Battle, playerIdx: number, opts: TurnOptions,
+  api: GameAPI, model: NNModel, playerIdx: number, opts: TurnOptions,
 ): Generator<void> {
   const eps = opts.epsilon ?? 0;
-  const maxIter = battle.maxArmyAttacks * 4 + 8;
   let iter = 0;
 
-  while (battle.result === BattleResult.Ongoing) {
-    if (++iter > maxIter) throw new Error(battleStuckReport("battleLoop stuck", battle));
+  for (;;) {
+    const state = api.getState();
+    const battle = state.currentBattle;
+    if (!battle) return;
+    if (++iter > battle.maxArmyAttacks * 4 + 8) throw new Error(battleStuckReport("battleLoop stuck", battle));
     if (battle.phase === BattlePhase.AttackerTurn) {
       if (battle.actedArmies.size === 0) {
         const targetNodeIdx = NODE_ORDER.indexOf(battle.targetLocation);
-        const remainingAttacks = Math.min(...battle.attackerArmies.map((a) => battle.getRemainingAttacks(a)));
+        const attackerOwner = battle.attackerPlayer.name;
+        const remainingAttacks = Math.min(...battle.attackerArmies.map(army => api.getRemainingAttacks(armyIdOf(attackerOwner, army))));
         const context: DecisionContext = {
           type: "battleRetreat", targetNodeIdx, attackProgress: 1 - remainingAttacks / battle.maxArmyAttacks,
         };
-        const state = encodeState(game, rulesOf(game), playerIdx, context);
-        const pred = model.predict(state);
+        const input = encodeState(state, api, playerIdx, context);
+        const pred = model.predict(input);
         const retreat = chooseBinary(pred.battleRetreat, eps);
-        opts.onDecision?.({playerIdx, state, pred, action: {type: "battleRetreat", battleRetreat: retreat.choice ? 1 : 0},
+        opts.onDecision?.({playerIdx, state: input, pred, action: {type: "battleRetreat", battleRetreat: retreat.choice ? 1 : 0},
           explored: retreat.explored});
-        if (retreat.choice) { game.retreat(); yield; return; }
+        if (retreat.choice) { api.retreat(); yield; return; }
       }
 
-      yield* battleAllocatePhase(game, model, battle, playerIdx, true, opts);
+      yield* battleAllocatePhase(api, model, battle, playerIdx, true, opts);
     } else {
-      const defenderIdx = game.players.indexOf(battle.defenderPlayer);
-      yield* battleAllocatePhase(game, model, battle, defenderIdx, false, opts);
+      const defenderIdx = state.players.indexOf(battle.defenderPlayer);
+      yield* battleAllocatePhase(api, model, battle, defenderIdx, false, opts);
       yield;
     }
   }
@@ -300,33 +322,34 @@ function* battleLoop(
  * per-group fractions of the same prediction. Guarantees a non-empty selection.
  */
 function selectBattleArmies(
-  game: GameSystem, model: NNModel, playerIdx: number,
-  targetNodeIdx: number, candidates: Army[], opts: TurnOptions,
-): Map<Army, Unit[]> {
+  api: GameAPI, state: ReturnType<GameAPI["getState"]>, model: NNModel, playerIdx: number,
+  targetNodeIdx: number, candidates: ArmyData[], opts: TurnOptions,
+): ArmySelection[] {
+  const owner = state.players[playerIdx].name;
   const temp = opts.temperature ?? 0;
   const eps = opts.epsilon ?? 0;
-  const selected = new Map<Army, Unit[]>();
+  const selected = new Map<ArmyData, UnitData[]>();
   const remaining = [...candidates];
 
   while (remaining.length > 0) {
     const selectedPerType = perTypeState(selected);
-    const remainingPerType = perTypeState(remaining.map(army => [army, army.attackCandidates] as const));
+    const remainingPerType = perTypeState(remaining.map(army => [army, attackReady(army)] as const));
 
-    const options: Array<{army: Army | null; state: Float32Array; pred: NNPrediction}> = remaining.map(army => {
+    const options: Array<{army: ArmyData | null; input: Float32Array; pred: NNPrediction}> = remaining.map(army => {
       const context: DecisionContext = {
         type: "battleSelect", army, targetNodeIdx, selectedPerType, remainingPerType, isDone: false,
-        commitMask: groupMask(commitGroups(army.attackCandidates)),
+        commitMask: groupMask(commitGroups(attackReady(army))),
       };
-      const state = encodeState(game, rulesOf(game), playerIdx, context);
-      return {army, state, pred: model.predict(state)};
+      const input = encodeState(state, api, playerIdx, context);
+      return {army, input, pred: model.predict(input)};
     });
     if (selected.size > 0) {
       const context: DecisionContext = {
         type: "battleSelect", army: null, targetNodeIdx, selectedPerType, remainingPerType, isDone: true,
         commitMask: new Float32Array(NUM_COMMIT_GROUPS),
       };
-      const state = encodeState(game, rulesOf(game), playerIdx, context);
-      options.push({army: null, state, pred: model.predict(state)});
+      const input = encodeState(state, api, playerIdx, context);
+      options.push({army: null, input, pred: model.predict(input)});
     }
 
     const explored = eps > 0 && Math.random() < eps;
@@ -337,21 +360,21 @@ function selectBattleArmies(
     const commit = chosen.army ? chooseFractions(chosen.pred.commitFractionLogits, NUM_COMMIT_GROUPS, temp, eps) : null;
 
     options.forEach((o, i) => {
-      opts.onDecision?.({playerIdx, state: o.state, pred: o.pred,
+      opts.onDecision?.({playerIdx, state: o.input, pred: o.pred,
         action: {type: "battleSelect", chosen: i === pick ? 1 : 0, commitFraction: i === pick && commit ? commit.value : expectedFractions(o.pred.commitFractionLogits, NUM_COMMIT_GROUPS)},
         explored: explored || (i === pick && commit !== null && commit.explored)});
     });
 
     if (!chosen.army || !commit) break;
-    selected.set(chosen.army, unitsToCommitOnEngine(chosen.army, commit.value));
+    selected.set(chosen.army, unitsToCommit(chosen.army, commit.value));
     remaining.splice(remaining.indexOf(chosen.army), 1);
   }
 
-  return selected;
+  return [...selected].map(([army, units]) => ({army: armyIdOf(owner, army), selections: selectionsOf(units)}));
 }
 
 function* battlePhase(
-  game: GameSystem, model: NNModel, playerIdx: number, opts: TurnOptions,
+  api: GameAPI, model: NNModel, playerIdx: number, opts: TurnOptions,
 ): Generator<void> {
   const temp = opts.temperature ?? 0;
   const eps = opts.epsilon ?? 0;
@@ -359,7 +382,7 @@ function* battlePhase(
 
   // Terminates: every iteration either stops or adds a node to `fought`
   while (true) {
-    const attackable = Array.from(game.attackableLocations).filter(n => !fought.has(n));
+    const attackable = [...api.getAttackableLocations()].filter(n => !fought.has(n));
     if (attackable.length === 0) break;
 
     const attackableMask = new Float32Array(NUM_NODES);
@@ -371,28 +394,29 @@ function* battlePhase(
     optionMask.set(attackableMask);
     optionMask[BATTLE_TARGET_STOP] = 1;
 
+    const state = api.getState();
     const targetContext: DecisionContext = {type: "battleTarget", attackableMask};
-    const targetState = encodeState(game, rulesOf(game), playerIdx, targetContext);
-    const targetPred = model.predict(targetState);
+    const targetInput = encodeState(state, api, playerIdx, targetContext);
+    const targetPred = model.predict(targetInput);
     const target = chooseAction(targetPred.battleTargetLogits, optionMask, temp, eps);
     const choice = target.choice;
-    opts.onDecision?.({playerIdx, state: targetState, pred: targetPred, action: {type: "battleTarget", battleTarget: choice},
+    opts.onDecision?.({playerIdx, state: targetInput, pred: targetPred, action: {type: "battleTarget", battleTarget: choice},
       explored: target.explored});
     if (choice === BATTLE_TARGET_STOP) break;
 
     const location = NODE_ORDER[choice];
     fought.add(location);
-    const candidates = game.getArmiesInRange(location);
+    const candidateKeys = new Set(api.getArmiesInRange(location).map(keyOf));
+    const candidates = state.players[playerIdx].armies.filter(army => candidateKeys.has(keyOf(army)));
     if (candidates.length === 0) continue;
 
-    const selected = selectBattleArmies(game, model, playerIdx, choice, candidates, opts);
-    if (selected.size === 0) continue;
+    const attackers = selectBattleArmies(api, state, model, playerIdx, choice, candidates, opts);
+    if (attackers.length === 0) continue;
 
-    const battle = game.startBattle([...selected.values()].flat(), location);
-    if (!battle) continue;
+    if (!api.startBattle(attackers, location)) continue;
 
     yield;
-    yield* battleLoop(game, model, battle, playerIdx, opts);
+    yield* battleLoop(api, model, playerIdx, opts);
     yield;
   }
 }
@@ -400,10 +424,9 @@ function* battlePhase(
 // ─── Phase 4: Recruitment ───
 
 function* recruitPhase(
-  game: GameSystem, model: NNModel, playerIdx: number, opts: TurnOptions,
+  api: GameAPI, model: NNModel, playerIdx: number, opts: TurnOptions,
 ): Generator<void> {
-  const player = game.players[playerIdx];
-  const recruitLocs = game.recruitLocations;
+  const recruitLocs = api.getRecruitLocations();
   const temp = opts.temperature ?? 0;
   const eps = opts.epsilon ?? 0;
 
@@ -412,22 +435,23 @@ function* recruitPhase(
     if (locIdx < 0) continue;
 
     for (const unitType of UNIT_TYPES) {
-      const cost = game.unitStatsMap[unitType].cost;
-      const affordable = Math.floor(player.money / cost);
+      const state = api.getState();
+      const cost = state.unitStatsMap[unitType].cost;
+      const affordable = Math.floor(state.players[playerIdx].money / cost);
       if (affordable <= 0) continue;
 
       const context: DecisionContext = {type: "recruit", locationIdx: locIdx, unitType, affordableCount: affordable};
-      const state = encodeState(game, rulesOf(game), playerIdx, context);
-      const pred = model.predict(state);
+      const input = encodeState(state, api, playerIdx, context);
+      const pred = model.predict(input);
 
       const frac = chooseFractions(pred.recruitFractionLogits, 1, temp, eps);
-      opts.onDecision?.({playerIdx, state, pred, action: {type: "recruit", recruitFraction: frac.value[0]}, explored: frac.explored});
+      opts.onDecision?.({playerIdx, state: input, pred, action: {type: "recruit", recruitFraction: frac.value[0]}, explored: frac.explored});
 
       const count = Math.round(frac.value[0] * affordable);
       if (count <= 0) continue;
-      if (!player.canBuy(unitType, count)) continue;
+      if (!api.canBuy(unitType, count)) continue;
 
-      if (!game.recruitPlayerArmy(unitType, location, count)) continue;
+      if (!api.recruit(unitType, location, count)) continue;
       yield;
     }
   }
@@ -437,37 +461,38 @@ function* recruitPhase(
 
 const DEFAULT_OPTS: TurnOptions = {};
 
-export function* executeNNTurnSteps(game: GameSystem, model: NNModel, opts?: TurnOptions): Generator<void> {
+export function* executeNNTurnSteps(api: GameAPI, model: NNModel, opts?: TurnOptions): Generator<void> {
   const o = opts ?? DEFAULT_OPTS;
-  const playerIdx = game.currentPlayerIndex;
+  const state = api.getState();
+  const playerIdx = state.currentPlayerIndex;
 
-  if (game.currentPlayer.defeated || game.gameOver) {
-    game.endTurn();
+  if (state.players[playerIdx].defeated || api.isGameOver()) {
+    api.endTurn();
     return;
   }
 
   // A loaded save can carry an in-progress battle; finish it before the phases
-  if (game.currentBattle) {
-    yield* battleLoop(game, model, game.currentBattle, playerIdx, o);
+  if (api.hasBattle()) {
+    yield* battleLoop(api, model, playerIdx, o);
     yield;
   }
 
-  yield* armyActionsPhase(game, model, playerIdx, o);
-  yield* battlePhase(game, model, playerIdx, o);
-  yield* armyActionsPhase(game, model, playerIdx, o);
-  yield* recruitPhase(game, model, playerIdx, o);
+  yield* armyActionsPhase(api, model, playerIdx, o);
+  yield* battlePhase(api, model, playerIdx, o);
+  yield* armyActionsPhase(api, model, playerIdx, o);
+  yield* recruitPhase(api, model, playerIdx, o);
 
-  game.endTurn();
+  api.endTurn();
 }
 
-export function executeNNTurn(game: GameSystem, model: NNModel, opts?: TurnOptions): void {
-  const gen = executeNNTurnSteps(game, model, opts);
+export function executeNNTurn(api: GameAPI, model: NNModel, opts?: TurnOptions): void {
+  const gen = executeNNTurnSteps(api, model, opts);
   while (!gen.next().done) { /* drain */ }
 }
 
 /** Execute one defender phase using NN model. */
-export function executeNNDefenderPhase(game: GameSystem, model: NNModel, battle: Battle): void {
-  const defenderIdx = game.players.indexOf(battle.defenderPlayer);
-  const gen = battleAllocatePhase(game, model, battle, defenderIdx, false, {});
+export function executeNNDefenderPhase(api: GameAPI, model: NNModel, battle: BattleData): void {
+  const defenderIdx = api.getState().players.findIndex(player => player.name === battle.defenderPlayer.name);
+  const gen = battleAllocatePhase(api, model, battle, defenderIdx, false, {});
   while (!gen.next().done) { /* drain */ }
 }

@@ -146,7 +146,7 @@ export function nnVsRandomGame(
   for (let turn = 0; turn < maxTurns * 3 && !game.gameOver; turn++) {
     takeSnapshot(game, model, records, snapshots);
     if (game.currentPlayerIndex === nnIdx) {
-      executeNNTurn(game, model, opts);
+      executeNNTurn(GameAPI.of(game), model, opts);
     } else {
       randomTurn(GameAPI.of(game));
     }
@@ -170,7 +170,7 @@ export function nnSelfPlayGame(
 
   for (let turn = 0; turn < maxTurns * 3 && !game.gameOver; turn++) {
     takeSnapshot(game, model, records, snapshots);
-    executeNNTurn(game, model, opts);
+    executeNNTurn(GameAPI.of(game), model, opts);
   }
 
   return finishGame(game, records, snapshots);
@@ -194,7 +194,7 @@ export function nnVsOpponentGame(
   for (let turn = 0; turn < maxTurns * 3 && !game.gameOver; turn++) {
     takeSnapshot(game, model, records, snapshots);
     if (game.currentPlayerIndex === nnIdx) {
-      executeNNTurn(game, model, opts);
+      executeNNTurn(GameAPI.of(game), model, opts);
     } else {
       opponentFn(game);
     }

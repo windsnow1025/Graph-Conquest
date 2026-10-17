@@ -6,6 +6,7 @@ import {setupBackend} from "../../src/setupBackend";
 import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
+import GameAPI from "../../../src/lib/GameAPI";
 import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {greedyTurn, scorePlayer} from "../../src/GreedyAI";
@@ -27,7 +28,7 @@ async function main() {
     const greedyIdx = (g + 1) % 3;
 
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model);
+      if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model);
       else if (game.currentPlayerIndex === greedyIdx) greedyTurn(game);
       else greedyTurn(game);  // 3rd player also greedy
     }

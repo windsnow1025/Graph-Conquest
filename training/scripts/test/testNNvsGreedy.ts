@@ -32,7 +32,7 @@ async function main() {
     const t0 = Date.now();
 
     for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex === nnIdx) executeNNTurn(game, model);
+      if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model);
       else if (game.currentPlayerIndex === greedyIdx) greedyTurn(game);
       else randomTurn(GameAPI.of(game));
     }
