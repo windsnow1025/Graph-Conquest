@@ -508,7 +508,7 @@ function App() {
             const units = player.armies.reduce((sum, a) => sum + a.units.length, 0);
             let income = 0;
             for (const [node, owner] of game.nodeOwnership) {
-              if (owner === player) income += game.gameMap.getNodeData(node)!.income;
+              if (owner === player) income += game.gameMap.getNodeData(node).income;
             }
             const upkeep = game.getUpkeep(player);
             const interest = Math.floor(player.money * DefaultConfig.interestRate);

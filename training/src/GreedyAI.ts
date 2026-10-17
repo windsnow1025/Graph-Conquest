@@ -68,7 +68,7 @@ export function scorePlayer(game: GameSystem, playerIdx: number): number {
   const player = game.players[playerIdx];
   let nodeIncome = 0;
   for (const [node, owner] of game.nodeOwnership) {
-    if (owner === player) nodeIncome += game.gameMap.getNodeData(node)?.income ?? 0;
+    if (owner === player) nodeIncome += game.gameMap.getNodeData(node).income;
   }
   const interest = Math.floor(player.money * game.interestRate);
   const upkeep = game.getUpkeep(player);
@@ -86,7 +86,7 @@ let _cachedTotalIncome = 0;
 function quantile(game: GameSystem, playerIdx: number): number {
   if (_cachedTotalIncome === 0) {
     for (const [node] of game.gameMap.nodes) {
-      _cachedTotalIncome += game.gameMap.getNodeData(node)?.income ?? 0;
+      _cachedTotalIncome += game.gameMap.getNodeData(node).income;
     }
   }
   const scores = [0, 1, 2].map(i => scorePlayer(game, i));
@@ -340,7 +340,7 @@ function simpleNextTurn(game: GameSystem, playerIdx: number): void {
   player.money = Math.floor(player.money * (1 + game.interestRate));
   let nodeIncome = 0;
   for (const [node, owner] of game.nodeOwnership) {
-    if (owner === player) nodeIncome += game.gameMap.getNodeData(node)?.income ?? 0;
+    if (owner === player) nodeIncome += game.gameMap.getNodeData(node).income;
   }
   player.money += nodeIncome;
   player.money -= game.getUpkeep(player);

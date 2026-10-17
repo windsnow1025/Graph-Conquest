@@ -85,7 +85,7 @@ function getDistanceMatrix(graph: Graph): Float32Array {
   const mat = new Float32Array(NUM_NODES * NUM_NODES);
   for (let i = 0; i < NUM_NODES; i++) {
     for (let j = 0; j < NUM_NODES; j++) {
-      const d = graph.getDistance(NODE_ORDER[i], NODE_ORDER[j])!;
+      const d = graph.getDistance(NODE_ORDER[i], NODE_ORDER[j]);
       mat[i * NUM_NODES + j] = (d === Infinity ? MAX_DISTANCE : d) / MAX_DISTANCE;
     }
   }
@@ -258,7 +258,7 @@ export function encodeState(
     let nodeIncome = 0;
     for (const [node, nodeOwner] of game.nodeOwnership) {
       if (nodeOwner === p) {
-        nodeIncome += game.gameMap.getNodeData(node)?.income ?? 0;
+        nodeIncome += game.gameMap.getNodeData(node).income;
       }
     }
     buf[offset++] = nodeIncome / 68;
@@ -285,8 +285,8 @@ export function encodeState(
     const owner = game.nodeOwnership.get(nodeName) ?? null;
     const nodeData = game.gameMap.getNodeData(nodeName);
 
-    buf[offset++] = (nodeData?.income ?? 0) / 10;
-    buf[offset++] = nodeData?.canRecruit ? 1 : 0;
+    buf[offset++] = nodeData.income / 10;
+    buf[offset++] = nodeData.canRecruit ? 1 : 0;
 
     if (owner === perspPlayers[0]) {
       buf[offset] = 1;
