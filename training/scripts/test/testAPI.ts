@@ -18,6 +18,7 @@
  * getArmiesInRange, hasAttackTargets.
  * Step 5, fighting: canAct, getTargetsInRange, getUnitsNeeded,
  * getRemainingAttacks, allocateAttack, retreat.
+ * Step 6, the fork: fork.
  *
  * Usage: npx tsx training/scripts/test/testAPI.ts
  */
@@ -214,6 +215,12 @@ function checkExitAndInput(): void {
     inputError(() => api.canAct(blueInfantry)) && inputError(() => api.allocateAttack(blueInfantry, [])));
   check("retreating without a battle is the false verdict", !api.retreat());
   check("the turn can end after the battle", api.endTurn());
+
+  const fork = api.fork();
+  check("a fork is an API object on a copy of the game", fork instanceof GameAPI && isDeepStrictEqual(fork.toJSON(), api.toJSON()));
+  check("a fork plays on without the original", fork.endTurn() && fork.getState().currentPlayerIndex === 2 && api.getState().currentPlayerIndex === 1);
+  // @ts-expect-error: the engine is private
+  check("a fork hides its engine too", fork.game === undefined);
 }
 
 /** The state and every query of an API built from the engine's save, against the engine. */
@@ -224,6 +231,7 @@ function checkAll(game: GameSystem, after: string): void {
   if (state instanceof GameSystem || state.players[0] instanceof Player) fail(`getState returned a live object after ${after}`);
   if (!isDeepStrictEqual(state, structuredClone(game))) fail(`getState after ${after}`);
   if (!isDeepStrictEqual(api.toJSON(), game.toJSON())) fail(`toJSON after ${after}`);
+  if (!isDeepStrictEqual(api.fork().toJSON(), game.toJSON())) fail(`fork after ${after}`);
 
   const battleData = state.currentBattle;
   if (battleData) {
