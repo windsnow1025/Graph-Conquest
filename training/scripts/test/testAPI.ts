@@ -139,16 +139,16 @@ function checkExitAndInput(): void {
   const recruited = (count: number): UnitSelection[] => [{currentHealth: 10, remainingMoves: 0, canAttack: false, count}];
   const oneMover: UnitSelection[] = [{currentHealth: 10, remainingMoves: 1, canAttack: true, count: 1}];
   const armed = JSON.stringify(api.toJSON());
-  check("an unknown army is an input error", inputError(() => api.moveUnits(nowhere, "Blue to Center", recruited(1))));
+  check("an unknown army is an input error", inputError(() => api.moveUnits(nowhere, recruited(1), "Blue to Center")));
   check("an unknown owner is an input error", inputError(() => api.disbandUnits({...blueInfantry, owner: "Nobody"}, recruited(1))));
-  check("an unknown destination is an input error", inputError(() => api.moveUnits(blueInfantry, "Nowhere", recruited(1))));
+  check("an unknown destination is an input error", inputError(() => api.moveUnits(blueInfantry, recruited(1), "Nowhere")));
   check("a selection with a fractional count is an input error", inputError(() => api.disbandUnits(blueInfantry, [{...recruited(1)[0], count: 1.5}])));
   check("a state no unit is in is an input error", inputError(() => api.disbandUnits(blueInfantry, oneMover)));
   check("more units than the army has in that state is an input error", inputError(() => api.disbandUnits(blueInfantry, recruited(6))));
   check("a state selected twice is an input error", inputError(() => api.disbandUnits(blueInfantry, [...recruited(1), ...recruited(1)])));
-  check("an army of another player is an input error", inputError(() => api.moveUnits(neutralCenter, "Blue to Center", recruited(1))) && inputError(() => api.disbandUnits(neutralCenter, recruited(1))));
-  check("an empty selection is the false verdict", !api.moveUnits(blueInfantry, "Blue to Center", []) && !api.disbandUnits(blueInfantry, []));
-  check("units without moves cannot move", !api.moveUnits(blueInfantry, "Blue to Center", recruited(1)));
+  check("an army of another player is an input error", inputError(() => api.moveUnits(neutralCenter, recruited(1), "Blue to Center")) && inputError(() => api.disbandUnits(neutralCenter, recruited(1))));
+  check("an empty selection is the false verdict", !api.moveUnits(blueInfantry, [], "Blue to Center") && !api.disbandUnits(blueInfantry, []));
+  check("units without moves cannot move", !api.moveUnits(blueInfantry, recruited(1), "Blue to Center"));
   check("input errors and rejections leave the state untouched", JSON.stringify(api.toJSON()) === armed);
   check("a movement query about an unknown army is an input error", inputError(() => api.getMovableLocations(nowhere)));
   check("a movement query with an unknown destination is an input error", inputError(() => api.getMoveCandidates(blueInfantry, "Nowhere")));
@@ -239,7 +239,7 @@ function watch(game: GameSystem): void {
   game.movePlayerUnits = (units, location) => {
     const id = idOf(game, armyOf(game, units));
     const selection = selectionOf(units);
-    return mirror(game, "moveUnits", api => api.moveUnits(id, location, selection), () => move(units, location), verdict => verdict);
+    return mirror(game, "moveUnits", api => api.moveUnits(id, selection, location), () => move(units, location), verdict => verdict);
   };
   game.disbandPlayerUnits = (units) => {
     const id = idOf(game, armyOf(game, units));
