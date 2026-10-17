@@ -36,6 +36,7 @@ import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {randomTurn} from "../../src/Opponents";
 import {greedyTurn} from "../../src/GreedyAI";
 import {createRandomizedGame, seededRandom} from "../../src/trainUtils";
+import {selectionsOf} from "../../../src/AI/nn/UnitGroups";
 import {isDeepStrictEqual} from "util";
 import * as path from "path";
 
@@ -91,19 +92,7 @@ function attackersOf(game: GameSystem, units: Unit[]): ArmySelection[] {
     if (armyUnits) armyUnits.push(unit);
     else unitsByArmy.set(army, [unit]);
   }
-  return [...unitsByArmy].map(([army, armyUnits]) => ({army: idOf(game, army), selections: selectionOf(armyUnits)}));
-}
-
-/** The unit list a consumer passes to the engine, as one state and count per state, in order of first appearance. */
-function selectionOf(units: Unit[]): UnitSelection[] {
-  const entries = new Map<string, UnitSelection>();
-  for (const unit of units) {
-    const state = `${unit.currentHealth}|${unit.remainingMoves}|${unit.canAttack}`;
-    const entry = entries.get(state);
-    if (entry) entry.count++;
-    else entries.set(state, {currentHealth: unit.currentHealth, remainingMoves: unit.remainingMoves, canAttack: unit.canAttack, count: 1});
-  }
-  return [...entries.values()];
+  return [...unitsByArmy].map(([army, armyUnits]) => ({army: idOf(game, army), selections: selectionsOf(armyUnits)}));
 }
 
 /** The exit, the input errors and the verdicts, on the default configuration. */
@@ -320,12 +309,12 @@ function watch(game: GameSystem): void {
     mirror(game, "recruit", api => api.recruit(unitType, location, count), () => recruit(unitType, location, count), army => army !== null);
   game.movePlayerUnits = (units, location) => {
     const id = idOf(game, armyOf(game, units));
-    const selection = selectionOf(units);
+    const selection = selectionsOf(units);
     return mirror(game, "moveUnits", api => api.moveUnits(id, selection, location), () => move(units, location), verdict => verdict);
   };
   game.disbandPlayerUnits = (units) => {
     const id = idOf(game, armyOf(game, units));
-    const selection = selectionOf(units);
+    const selection = selectionsOf(units);
     return mirror(game, "disbandUnits", api => api.disbandUnits(id, selection), () => disband(units), verdict => verdict);
   };
   game.startBattle = (units, target) => {

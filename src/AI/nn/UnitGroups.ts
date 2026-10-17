@@ -14,7 +14,8 @@
  *   commit  (3): groups 0, 2, 4, the attack-ready units by remaining moves
  *   disband (6): all groups
  */
-import type Unit from "../../lib/Unit";
+import type {UnitData} from "../../lib/Unit";
+import type {UnitSelection} from "../../lib/GameAPI";
 
 const MAX_MOVES = 2; // unit speed in this game is at most 2
 export const NUM_UNIT_GROUPS = (MAX_MOVES + 1) * 2;
@@ -22,45 +23,45 @@ export const NUM_MOVE_GROUPS = MAX_MOVES * 2;
 export const NUM_COMMIT_GROUPS = MAX_MOVES + 1;
 export const NUM_DISBAND_GROUPS = NUM_UNIT_GROUPS;
 
-function unitGroup(unit: Unit): number {
+function unitGroup(unit: UnitData): number {
   return unit.remainingMoves * 2 + (unit.canAttack ? 0 : 1);
 }
 
 /** Partition units into the 6 groups, keeping the army's unit order within a group. */
-export function groupUnits(units: Unit[]): Unit[][] {
-  const groups: Unit[][] = Array.from({length: NUM_UNIT_GROUPS}, () => []);
+export function groupUnits<T extends UnitData>(units: T[]): T[][] {
+  const groups: T[][] = Array.from({length: NUM_UNIT_GROUPS}, () => []);
   for (const unit of units) groups[unitGroup(unit)].push(unit);
   return groups;
 }
 
-export function groupCounts(units: Unit[]): number[] {
+export function groupCounts(units: UnitData[]): number[] {
   const counts = new Array<number>(NUM_UNIT_GROUPS).fill(0);
   for (const unit of units) counts[unitGroup(unit)]++;
   return counts;
 }
 
 /** Move groups of the units that can reach a destination (groups 2..5 as 0..3). */
-export function moveGroups(candidates: Unit[]): Unit[][] {
+export function moveGroups<T extends UnitData>(candidates: T[]): T[][] {
   return groupUnits(candidates).slice(2);
 }
 
 /** Commit groups: the attack-ready units by remaining moves (groups 0, 2, 4 as 0..2). */
-export function commitGroups(attackCandidates: Unit[]): Unit[][] {
+export function commitGroups<T extends UnitData>(attackCandidates: T[]): T[][] {
   const groups = groupUnits(attackCandidates);
   return [groups[0], groups[2], groups[4]];
 }
 
-export function disbandGroups(units: Unit[]): Unit[][] {
+export function disbandGroups<T extends UnitData>(units: T[]): T[][] {
   return groupUnits(units);
 }
 
 /** 1 for each non-empty group. */
-export function groupMask(groups: Unit[][]): Float32Array {
+export function groupMask(groups: UnitData[][]): Float32Array {
   return Float32Array.from(groups, group => (group.length > 0 ? 1 : 0));
 }
 
 /** Per-group counts as fractions of the group sizes; 0 for empty groups. */
-export function countsToFractions(groups: Unit[][], counts: ArrayLike<number>): Float32Array {
+export function countsToFractions(groups: UnitData[][], counts: ArrayLike<number>): Float32Array {
   return Float32Array.from(groups, (group, g) => (group.length > 0 ? counts[g] / group.length : 0));
 }
 
@@ -70,8 +71,8 @@ export function countsToFractions(groups: Unit[][], counts: ArrayLike<number>): 
  * one unit from the group with the highest fraction, so a chosen action always
  * acts on at least one unit.
  */
-export function takeByFractions(groups: Unit[][], fractions: ArrayLike<number>, weakestFirst: boolean): Unit[] {
-  const taken: Unit[] = [];
+export function takeByFractions<T extends UnitData>(groups: T[][], fractions: ArrayLike<number>, weakestFirst: boolean): T[] {
+  const taken: T[] = [];
   let best = -1;
   for (let g = 0; g < groups.length; g++) {
     const group = groups[g];
@@ -84,6 +85,18 @@ export function takeByFractions(groups: Unit[][], fractions: ArrayLike<number>, 
   return taken;
 }
 
-function sortByHealth(units: Unit[], ascending: boolean): Unit[] {
+function sortByHealth<T extends UnitData>(units: T[], ascending: boolean): T[] {
   return [...units].sort((a, b) => (ascending ? a.currentHealth - b.currentHealth : b.currentHealth - a.currentHealth));
+}
+
+/** Units as the API names them: one state and count per state, in order of first appearance. */
+export function selectionsOf(units: UnitData[]): UnitSelection[] {
+  const selections = new Map<string, UnitSelection>();
+  for (const unit of units) {
+    const state = `${unit.currentHealth}|${unit.remainingMoves}|${unit.canAttack}`;
+    const selection = selections.get(state);
+    if (selection) selection.count++;
+    else selections.set(state, {currentHealth: unit.currentHealth, remainingMoves: unit.remainingMoves, canAttack: unit.canAttack, count: 1});
+  }
+  return [...selections.values()];
 }
