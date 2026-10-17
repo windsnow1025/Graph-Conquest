@@ -36,7 +36,7 @@ import type Unit from "../../../src/lib/Unit";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {randomTurn} from "../../src/Opponents";
 import {greedyTurn} from "../../src/GreedyAI";
-import {createRandomizedGame, seededRandom} from "../../src/trainUtils";
+import {createRandomizedConfig, seededRandom} from "../../src/trainUtils";
 import {selectionsOf} from "../../../src/AI/nn/UnitGroups";
 import {isDeepStrictEqual} from "util";
 import * as path from "path";
@@ -351,14 +351,14 @@ async function main() {
   await setupBackend();
   Math.random = seededRandom(SEED);
   for (let g = 0; g < RANDOM_GAMES; g++) {
-    const game = createRandomizedGame();
+    const game = new GameSystem(createRandomizedConfig());
     watch(game);
     while (!game.gameOver) randomTurn(GameAPI.of(game));
   }
   console.log(`random games: ${JSON.stringify(stats)}`);
 
   for (let g = 0; g < GREEDY_GAMES; g++) {
-    const game = createRandomizedGame();
+    const game = new GameSystem(createRandomizedConfig());
     watch(game);
     while (!game.gameOver) {
       if (game.currentPlayerIndex === g % 3) greedyTurn(GameAPI.of(game));

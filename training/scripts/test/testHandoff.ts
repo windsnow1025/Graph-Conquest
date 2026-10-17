@@ -12,7 +12,6 @@ import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {greedyTurn} from "../../src/GreedyAI";
 import {randomTurn} from "../../src/Opponents";
-import GameAPI from "../../../src/lib/GameAPI";
 import {MAX_TURNS, MODEL_DIR_PHASE1, countNodes, createRandomizedGame} from "../../src/trainUtils";
 import * as path from "path";
 
@@ -27,25 +26,27 @@ async function main() {
 
   let nnWins = 0, handoffs = 0, greedyWins = 0, greedyDraws = 0;
   for (let g = 0; g < numGames; g++) {
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const nnIdx = g % 3;
-    const self = game.players[nnIdx];
+    const name = api.getState().players[nnIdx].name;
     let handedOff = false;
     const t0 = Date.now();
-    for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex !== nnIdx) { randomTurn(GameAPI.of(game)); continue; }
-      if (!handedOff && game.turnCount >= handoffTurn) {
+    for (let turn = 0; turn < MAX_TURNS * 3 && !api.isGameOver(); turn++) {
+      const state = api.getState();
+      if (state.currentPlayerIndex !== nnIdx) { randomTurn(api); continue; }
+      if (!handedOff && state.turnCount >= handoffTurn) {
         handedOff = true;
         handoffs++;
-        console.log(`Game ${g + 1}/${numGames} (${self.name}): handoff at T${game.turnCount}, units=${self.armies.reduce((s, a) => s + a.units.length, 0)} nodes=${countNodes(game, self)} money=${self.money}`);
+        const self = state.players[nnIdx];
+        console.log(`Game ${g + 1}/${numGames} (${name}): handoff at T${state.turnCount}, units=${self.armies.reduce((s, a) => s + a.units.length, 0)} nodes=${countNodes(state, self)} money=${self.money}`);
       }
-      if (handedOff) greedyTurn(GameAPI.of(game)); else executeNNTurn(GameAPI.of(game), model);
+      if (handedOff) greedyTurn(api); else executeNNTurn(api, model);
     }
-    const winner = game.winner?.name ?? "draw";
-    const won = winner === self.name;
+    const winner = api.getWinner() ?? "draw";
+    const won = winner === name;
     if (!handedOff) { if (won) nnWins++; }
     else if (won) greedyWins++; else greedyDraws++;
-    console.log(`Game ${g + 1}/${numGames} (${self.name}): ${winner} T${game.turnCount}${handedOff ? " after handoff" : ""} ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    console.log(`Game ${g + 1}/${numGames} (${name}): ${winner} T${api.getState().turnCount}${handedOff ? " after handoff" : ""} ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   }
   console.log(`\nSummary: NN finished ${nnWins} of ${numGames - handoffs} games before T${handoffTurn}; after ${handoffs} handoffs greedy won ${greedyWins} and drew ${greedyDraws}`);
   model.dispose();

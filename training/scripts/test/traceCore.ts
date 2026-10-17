@@ -13,7 +13,6 @@ import {setupBackend} from "../../src/setupBackend";
 import {NNModel} from "../../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
-import GameSystem from "../../../src/lib/GameSystem";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {randomTurn} from "../../src/Opponents";
 import GameAPI from "../../../src/lib/GameAPI";
@@ -26,15 +25,16 @@ const SEED = 20261003;
 const RANDOM_GAMES = 40;
 const GREEDY_GAMES = 3;
 
-function turnLine(label: string, game: GameSystem, turn: number, playerIdx: number): string {
-  const money = game.players.map(p => p.money).join(",");
-  const units = game.players.map(p => p.armies.reduce((sum, army) => sum + army.units.length, 0)).join(",");
-  const state = crypto.createHash("md5").update(JSON.stringify(game.toJSON())).digest("hex").slice(0, 8);
-  return `${label} T${turn} P${playerIdx} money=${money} units=${units} state=${state}`;
+function turnLine(label: string, api: GameAPI, turn: number, playerIdx: number): string {
+  const state = api.getState();
+  const money = state.players.map(p => p.money).join(",");
+  const units = state.players.map(p => p.armies.reduce((sum, army) => sum + army.units.length, 0)).join(",");
+  const hash = crypto.createHash("md5").update(JSON.stringify(api.toJSON())).digest("hex").slice(0, 8);
+  return `${label} T${turn} P${playerIdx} money=${money} units=${units} state=${hash}`;
 }
 
-function endLine(label: string, game: GameSystem): string {
-  return `${label} END T${game.turnCount} winner=${game.winner?.name ?? "draw"}`;
+function endLine(label: string, api: GameAPI): string {
+  return `${label} END T${api.getState().turnCount} winner=${api.getWinner() ?? "draw"}`;
 }
 
 async function main() {
@@ -42,36 +42,36 @@ async function main() {
   Math.random = seededRandom(SEED);
 
   for (let g = 0; g < RANDOM_GAMES; g++) {
-    const game = createRandomizedGame();
-    while (!game.gameOver) {
-      const turn = game.turnCount, playerIdx = game.currentPlayerIndex;
-      randomTurn(GameAPI.of(game));
-      console.log(turnLine(`R${g}`, game, turn, playerIdx));
+    const api = createRandomizedGame();
+    while (!api.isGameOver()) {
+      const {turnCount: turn, currentPlayerIndex: playerIdx} = api.getState();
+      randomTurn(api);
+      console.log(turnLine(`R${g}`, api, turn, playerIdx));
     }
-    console.log(endLine(`R${g}`, game));
+    console.log(endLine(`R${g}`, api));
   }
 
   for (let g = 0; g < GREEDY_GAMES; g++) {
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const greedyIdx = g % 3;
-    while (!game.gameOver) {
-      const turn = game.turnCount, playerIdx = game.currentPlayerIndex;
-      if (playerIdx === greedyIdx) greedyTurn(GameAPI.of(game));
-      else randomTurn(GameAPI.of(game));
-      console.log(turnLine(`G${g}`, game, turn, playerIdx));
+    while (!api.isGameOver()) {
+      const {turnCount: turn, currentPlayerIndex: playerIdx} = api.getState();
+      if (playerIdx === greedyIdx) greedyTurn(api);
+      else randomTurn(api);
+      console.log(turnLine(`G${g}`, api, turn, playerIdx));
     }
-    console.log(endLine(`G${g}`, game));
+    console.log(endLine(`G${g}`, api));
   }
 
   const model = new NNModel();
   await model.load(nodeFileSystem(path.resolve("public/model")));
-  const game = new GameSystem(DefaultConfig);
-  while (!game.gameOver) {
-    const turn = game.turnCount, playerIdx = game.currentPlayerIndex;
-    executeNNTurn(GameAPI.of(game), model);
-    console.log(turnLine("N", game, turn, playerIdx));
+  const api = GameAPI.create(DefaultConfig);
+  while (!api.isGameOver()) {
+    const {turnCount: turn, currentPlayerIndex: playerIdx} = api.getState();
+    executeNNTurn(api, model);
+    console.log(turnLine("N", api, turn, playerIdx));
   }
-  console.log(endLine("N", game));
+  console.log(endLine("N", api));
   model.dispose();
 }
 

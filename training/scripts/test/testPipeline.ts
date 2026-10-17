@@ -15,12 +15,11 @@ import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {greedyTurn, daggerTurn} from "../../src/GreedyAI";
 import {randomTurn} from "../../src/Opponents";
-import GameAPI from "../../../src/lib/GameAPI";
 import {nnVsRandomGame, recordsToSamples, snapshotsToValueSamples, assignAdvantages} from "../../src/SelfPlay";
 import {
   GAME_KIND, datasetPath, createTrajectoryWriter, writeManifest, materializeSamples,
 } from "../../src/TrajectoryStore";
-import {encodeState, rulesOf, STATE_SIZE} from "../../../src/AI/nn/StateEncoder";
+import {encodeState, STATE_SIZE} from "../../../src/AI/nn/StateEncoder";
 import type {Sample} from "../../src/SampleTypes";
 import {sampleToFloats, emptySample, SAMPLE_FLOATS} from "../../src/SampleTypes";
 import {
@@ -82,8 +81,8 @@ async function main() {
   // ── 1. NN vs random with exploration ──
   log("\n1. NN-vs-random recording (2 games, 12 rounds cap):");
   for (let g = 0; g < 2; g++) {
-    const game = createRandomizedGame();
-    const {records, outcomes} = nnVsRandomGame(GameAPI.of(game), model, g % 3, 12, 1.0, 0.2);
+    const api = createRandomizedGame();
+    const {records, outcomes} = nnVsRandomGame(api, model, g % 3, 12, 1.0, 0.2);
     const samples = recordsToSamples(records, outcomes);
     validateSamples(samples, `RL game ${g + 1}`);
     allSamples.push(...samples);
@@ -99,13 +98,14 @@ async function main() {
     const reference: Sample[] = [];
 
     for (let g = 0; g < 2; g++) {
-      const game = createRandomizedGame();
-      const result = nnVsRandomGame(GameAPI.of(game), model, g % 3, 12, 1.0, 0.2);
-      const winner = game.winner;
-      const winnerIdx = winner ? game.players.findIndex(p => p.name === winner.name) : -1;
-      const terminalStates = [0, 1, 2].map(pi => encodeState(game, rulesOf(game), pi));
+      const api = createRandomizedGame();
+      const result = nnVsRandomGame(api, model, g % 3, 12, 1.0, 0.2);
+      const state = api.getState();
+      const winner = api.getWinner();
+      const winnerIdx = winner === null ? -1 : state.players.findIndex(p => p.name === winner);
+      const terminalStates = [0, 1, 2].map(pi => encodeState(state, api, pi));
       writer.writeGame(
-        {kind: GAME_KIND.vsRandom, nnIdx: g % 3, opponentId: 0, winnerIdx, turnCount: game.turnCount},
+        {kind: GAME_KIND.vsRandom, nnIdx: g % 3, opponentId: 0, winnerIdx, turnCount: state.turnCount},
         result, terminalStates,
       );
 
@@ -151,11 +151,11 @@ async function main() {
   // ── 2. Greedy recording (3 rounds cap) ──
   log("\n2. Greedy recording (1 game, 3 rounds cap):");
   {
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const samples: Sample[] = [];
-    for (let t = 0; t < 9 && !game.gameOver; t++) {
-      if (game.currentPlayerIndex === 0) greedyTurn(GameAPI.of(game), samples);
-      else randomTurn(GameAPI.of(game));
+    for (let t = 0; t < 9 && !api.isGameOver(); t++) {
+      if (api.getState().currentPlayerIndex === 0) greedyTurn(api, samples);
+      else randomTurn(api);
     }
     validateSamples(samples, "Greedy");
     assert(samples.some(s => s.moveTargetIdx >= 0), "greedy produced no moveTarget samples");
@@ -165,11 +165,11 @@ async function main() {
   // ── 3. DAgger recording (2 rounds cap) ──
   log("\n3. DAgger recording (1 game, 2 rounds cap):");
   {
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const samples: Sample[] = [];
-    for (let t = 0; t < 6 && !game.gameOver; t++) {
-      if (game.currentPlayerIndex === 0) daggerTurn(GameAPI.of(game), model, samples);
-      else randomTurn(GameAPI.of(game));
+    for (let t = 0; t < 6 && !api.isGameOver(); t++) {
+      if (api.getState().currentPlayerIndex === 0) daggerTurn(api, model, samples);
+      else randomTurn(api);
     }
     validateSamples(samples, "DAgger");
     allSamples.push(...samples);
@@ -192,12 +192,12 @@ async function main() {
   const m2 = new NNModel();
   await m2.load(nodeFileSystem(SMOKE_MODEL_DIR));
 
-  const game = createRandomizedGame();
-  for (let turn = 0; turn < 40 * 3 && !game.gameOver; turn++) {
-    if (game.currentPlayerIndex === 0) executeNNTurn(GameAPI.of(game), m2);
-    else randomTurn(GameAPI.of(game));
+  const api = createRandomizedGame();
+  for (let turn = 0; turn < 40 * 3 && !api.isGameOver(); turn++) {
+    if (api.getState().currentPlayerIndex === 0) executeNNTurn(api, m2);
+    else randomTurn(api);
   }
-  log(`  Game finished: winner=${game.winner?.name ?? "none (turn cap)"} T${game.turnCount}`);
+  log(`  Game finished: winner=${api.getWinner() ?? "none (turn cap)"} T${api.getState().turnCount}`);
 
   m2.dispose();
   fs.rmSync(dataFile, {force: true});

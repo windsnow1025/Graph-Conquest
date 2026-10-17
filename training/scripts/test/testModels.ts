@@ -10,7 +10,6 @@ import {nodeFileSystem} from "../../src/nodeIO";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {scorePlayer, constantsOf} from "../../src/GreedyAI";
 import {randomTurn} from "../../src/Opponents";
-import GameAPI from "../../../src/lib/GameAPI";
 import {MODEL_DIR_PHASE1, MODEL_DIR_PHASE2, MODEL_DIR_PHASE3, MAX_TURNS, createRandomizedGame} from "../../src/trainUtils";
 
 const VS_RANDOM_GAMES = 30;
@@ -22,25 +21,27 @@ async function testVsRandom(label: string, model: NNModel) {
   const winTurns: number[] = [];
 
   for (let g = 0; g < VS_RANDOM_GAMES; g++) {
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const nnIdx = g % 3;
-    for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model);
-      else randomTurn(GameAPI.of(game));
+    for (let turn = 0; turn < MAX_TURNS * 3 && !api.isGameOver(); turn++) {
+      if (api.getState().currentPlayerIndex === nnIdx) executeNNTurn(api, model);
+      else randomTurn(api);
     }
-    const winner = game.winner?.name ?? "draw";
+    const state = api.getState();
+    const winner = api.getWinner() ?? "draw";
     const nnName = ["Blue", "Red", "Green"][nnIdx];
     if (winner === "draw") draws++;
-    else if (winner === nnName) { wins++; winTurns.push(game.turnCount); }
+    else if (winner === nnName) { wins++; winTurns.push(state.turnCount); }
     else losses++;
-    totalTurns += game.turnCount;
+    totalTurns += state.turnCount;
 
     const posName = ["B", "R", "G"][nnIdx];
     const result = winner === "draw" ? "DRAW" : winner === nnName ? "WIN " : "LOSE";
-    const scores = [0, 1, 2].map(i => scorePlayer(GameAPI.of(game), constantsOf(game), i));
+    const constants = constantsOf(state);
+    const scores = [0, 1, 2].map(i => scorePlayer(api, constants, i));
     console.log(
       `  ${String(g + 1).padStart(2)}/${VS_RANDOM_GAMES} (${posName}) ${result}: ` +
-      `${winner.padEnd(5)} T${String(game.turnCount).padEnd(3)} ` +
+      `${winner.padEnd(5)} T${String(state.turnCount).padEnd(3)} ` +
       `scores=[${scores.map(s => String(s.toFixed(0)).padStart(4)).join(",")}]`
     );
   }
@@ -64,15 +65,16 @@ async function testThreeWay(models: {label: string; model: NNModel}[]) {
   ];
 
   for (let g = 0; g < H2H_GAMES; g++) {
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const arr = arrangements[g % 3]; // arr[playerSlot] = modelIdx
 
-    for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      const modelIdx = arr[game.currentPlayerIndex];
-      executeNNTurn(GameAPI.of(game), models[modelIdx].model);
+    for (let turn = 0; turn < MAX_TURNS * 3 && !api.isGameOver(); turn++) {
+      const modelIdx = arr[api.getState().currentPlayerIndex];
+      executeNNTurn(api, models[modelIdx].model);
     }
 
-    const winner = game.winner?.name ?? "draw";
+    const state = api.getState();
+    const winner = api.getWinner() ?? "draw";
     if (winner === "draw") {
       draws++;
     } else {
@@ -80,12 +82,13 @@ async function testThreeWay(models: {label: string; model: NNModel}[]) {
       winsBy[arr[winnerSlot]]++;
     }
 
-    const scores = [0, 1, 2].map(i => scorePlayer(GameAPI.of(game), constantsOf(game), i));
+    const constants = constantsOf(state);
+    const scores = [0, 1, 2].map(i => scorePlayer(api, constants, i));
     const labels = [0, 1, 2].map(slot => `${models[arr[slot]].label}=${["B","R","G"][slot]}`).join(" ");
     const result = winner === "draw" ? "DRAW " : `${models[arr[["Blue","Red","Green"].indexOf(winner)]].label}`;
     console.log(
       `  ${String(g + 1).padStart(2)}/${H2H_GAMES} (${labels}) ${result.padEnd(5)}: ` +
-      `${winner.padEnd(5)} T${String(game.turnCount).padEnd(3)} ` +
+      `${winner.padEnd(5)} T${String(state.turnCount).padEnd(3)} ` +
       `scores=[${scores.map(s => String(s.toFixed(0)).padStart(4)).join(",")}]`
     );
   }

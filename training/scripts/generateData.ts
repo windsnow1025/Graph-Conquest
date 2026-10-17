@@ -34,11 +34,10 @@
 import {setupBackend} from "../src/setupBackend";
 import {NNModel} from "../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "../src/nodeIO";
-import GameSystem from "../../src/lib/GameSystem";
-import {encodeState, rulesOf, STATE_SIZE} from "../../src/AI/nn/StateEncoder";
+import type GameAPI from "../../src/lib/GameAPI";
+import {encodeState, STATE_SIZE} from "../../src/AI/nn/StateEncoder";
 import {executeNNTurn} from "../../src/AI/TurnExecutor";
 import {passiveTurn, randomTurn} from "../src/Opponents";
-import GameAPI from "../../src/lib/GameAPI";
 import {greedyTurn, daggerTurn, scorePlayer, constantsOf} from "../src/GreedyAI";
 import {emptySample, terminalValue} from "../src/SampleTypes";
 import type {Sample} from "../src/SampleTypes";
@@ -101,19 +100,21 @@ function gitRev(): string {
   }
 }
 
-function winnerIndex(game: GameSystem): number {
-  const winner = game.winner;
-  if (!winner) return -1;
-  return game.players.findIndex(p => p.name === winner.name);
+function winnerIndex(api: GameAPI): number {
+  const winner = api.getWinner();
+  if (winner === null) return -1;
+  return api.getState().players.findIndex(p => p.name === winner);
 }
 
-function logGame(prefix: string, g: number, total: number, game: GameSystem, recordCount: number, elapsed: string): void {
+function logGame(prefix: string, g: number, total: number, api: GameAPI, recordCount: number, elapsed: string): void {
   if ((g + 1) % 10 !== 0) return;
-  const winner = game.winner?.name ?? "DRAW";
-  const scores = [0, 1, 2].map(i => scorePlayer(GameAPI.of(game), constantsOf(game), i));
-  const nodes = game.players.map(p => countNodes(game, p));
+  const state = api.getState();
+  const winner = api.getWinner() ?? "DRAW";
+  const constants = constantsOf(state);
+  const scores = [0, 1, 2].map(i => scorePlayer(api, constants, i));
+  const nodes = state.players.map(p => countNodes(state, p));
   logRaw(
-    `  ${prefix} ${String(g + 1).padStart(4)}/${total} ${winner.padEnd(5)} T${String(game.turnCount).padEnd(3)} ` +
+    `  ${prefix} ${String(g + 1).padStart(4)}/${total} ${winner.padEnd(5)} T${String(state.turnCount).padEnd(3)} ` +
     `scores=[${scores.map(s => String(s.toFixed(0)).padStart(4)).join(",")}] ` +
     `nodes=[${nodes.map(n => String(n).padStart(2)).join(",")}] ` +
     `${String(recordCount).padStart(5)}r ${elapsed}s`
@@ -155,13 +156,13 @@ async function generateVsRandom(name: string, dir: string, opts: Map<string, str
 
   log(`\nGenerating ${games} NN(${modelName})-vs-Random games (T=${temperature}, ε=${epsilon})`);
   for (let g = 0; g < games; g++) {
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const nnIdx = g % 3;
     const t0 = Date.now();
-    const result = nnVsRandomGame(GameAPI.of(game), model, nnIdx, MAX_TURNS, temperature, epsilon);
-    writeGameFrame(writer, game, result, {kind: GAME_KIND.vsRandom, nnIdx, opponentId: 0});
-    recordOutcome(stats, winnerIndex(game), nnIdx, false, game.turnCount);
-    logGame("[vsRand]", g, games, game, result.records.length, ((Date.now() - t0) / 1000).toFixed(1));
+    const result = nnVsRandomGame(api, model, nnIdx, MAX_TURNS, temperature, epsilon);
+    writeGameFrame(writer, api, result, {kind: GAME_KIND.vsRandom, nnIdx, opponentId: 0});
+    recordOutcome(stats, winnerIndex(api), nnIdx, false, api.getState().turnCount);
+    logGame("[vsRand]", g, games, api, result.records.length, ((Date.now() - t0) / 1000).toFixed(1));
   }
   model.dispose();
 
@@ -201,25 +202,25 @@ async function generateMixed(name: string, dir: string, opts: Map<string, string
 
   log(`\nPart A: ${gamesOpp} NN(${modelName}) games vs opponent rotation (T=${temperature}, ε=${epsilon})`);
   for (let g = 0; g < gamesOpp; g++) {
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const nnIdx = g % 3;
     // Rotate the opponent every 3 games so every seat faces every opponent
     const oppId = Math.floor(g / 3) % opponents.length;
     const t0 = Date.now();
-    const result = nnVsOpponentGame(GameAPI.of(game), model, nnIdx, opponents[oppId].fn, MAX_TURNS, temperature, epsilon);
-    writeGameFrame(writer, game, result, {kind: GAME_KIND.vsOpponent, nnIdx, opponentId: oppId});
-    recordOutcome(stats, winnerIndex(game), nnIdx, false, game.turnCount);
-    logGame(`[${opponents[oppId].name.padEnd(7)}]`, g, gamesOpp, game, result.records.length, ((Date.now() - t0) / 1000).toFixed(1));
+    const result = nnVsOpponentGame(api, model, nnIdx, opponents[oppId].fn, MAX_TURNS, temperature, epsilon);
+    writeGameFrame(writer, api, result, {kind: GAME_KIND.vsOpponent, nnIdx, opponentId: oppId});
+    recordOutcome(stats, winnerIndex(api), nnIdx, false, api.getState().turnCount);
+    logGame(`[${opponents[oppId].name.padEnd(7)}]`, g, gamesOpp, api, result.records.length, ((Date.now() - t0) / 1000).toFixed(1));
   }
 
   log(`\nPart B: ${gamesSelf} self-play games`);
   for (let g = 0; g < gamesSelf; g++) {
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const t0 = Date.now();
-    const result = nnSelfPlayGame(GameAPI.of(game), model, MAX_TURNS, temperature, epsilon);
-    writeGameFrame(writer, game, result, {kind: GAME_KIND.selfPlay, nnIdx: -1, opponentId: 0});
-    recordOutcome(stats, winnerIndex(game), -1, true, game.turnCount);
-    logGame("[self   ]", g, gamesSelf, game, result.records.length, ((Date.now() - t0) / 1000).toFixed(1));
+    const result = nnSelfPlayGame(api, model, MAX_TURNS, temperature, epsilon);
+    writeGameFrame(writer, api, result, {kind: GAME_KIND.selfPlay, nnIdx: -1, opponentId: 0});
+    recordOutcome(stats, winnerIndex(api), -1, true, api.getState().turnCount);
+    logGame("[self   ]", g, gamesSelf, api, result.records.length, ((Date.now() - t0) / 1000).toFixed(1));
   }
 
   model.dispose();
@@ -239,11 +240,12 @@ async function generateMixed(name: string, dir: string, opts: Map<string, string
 }
 
 function writeGameFrame(
-  writer: ReturnType<typeof createTrajectoryWriter>, game: GameSystem, result: GameResult,
+  writer: ReturnType<typeof createTrajectoryWriter>, api: GameAPI, result: GameResult,
   meta: Omit<PersistedGameMeta, "winnerIdx" | "turnCount">,
 ): void {
-  const terminalStates = [0, 1, 2].map(pi => encodeState(game, rulesOf(game), pi));
-  writer.writeGame({...meta, winnerIdx: winnerIndex(game), turnCount: game.turnCount}, result, terminalStates);
+  const state = api.getState();
+  const terminalStates = [0, 1, 2].map(pi => encodeState(state, api, pi));
+  writer.writeGame({...meta, winnerIdx: winnerIndex(api), turnCount: state.turnCount}, result, terminalStates);
 }
 
 // ─── imitation (phase 1 diet) ───
@@ -272,42 +274,44 @@ async function generateImitation(name: string, dir: string, opts: Map<string, st
   log(`\nGenerating imitation data: ${schedule.length} games (${counts.passive} vs passive, ${counts.random} vs random, ${counts.greedy} vs greedy, ${counts.dagger} DAgger with ${daggerModelName ?? "a fresh model"})`);
   for (let g = 0; g < schedule.length; g++) {
     const opType = schedule[g];
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const greedyIdx = g % 3;
     const gameSamples: Sample[] = [];
     const t0 = Date.now();
 
     const playTurn = (): void => {
+      const playerIdx = api.getState().currentPlayerIndex;
       if (opType === "dagger") {
-        if (game.currentPlayerIndex === greedyIdx) daggerTurn(GameAPI.of(game), daggerModel, gameSamples);
-        else randomTurn(GameAPI.of(game));
+        if (playerIdx === greedyIdx) daggerTurn(api, daggerModel, gameSamples);
+        else randomTurn(api);
       } else if (opType === "greedy") {
-        if (game.currentPlayerIndex === greedyIdx) greedyTurn(GameAPI.of(game), gameSamples);
-        else greedyTurn(GameAPI.of(game));
+        if (playerIdx === greedyIdx) greedyTurn(api, gameSamples);
+        else greedyTurn(api);
       } else {
-        if (game.currentPlayerIndex === greedyIdx) greedyTurn(GameAPI.of(game), gameSamples);
-        else if (opType === "passive") passiveTurn(GameAPI.of(game));
-        else randomTurn(GameAPI.of(game));
+        if (playerIdx === greedyIdx) greedyTurn(api, gameSamples);
+        else if (opType === "passive") passiveTurn(api);
+        else randomTurn(api);
       }
     };
-    for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) playTurn();
+    for (let turn = 0; turn < MAX_TURNS * 3 && !api.isGameOver(); turn++) playTurn();
 
-    const winner = game.winner?.name ?? "draw";
+    const state = api.getState();
+    const winner = api.getWinner() ?? "draw";
     // Overwrite value with the game outcome from each sample's own perspective
     // (battle samples include defender-perspective states)
     for (const s of gameSamples) {
-      s.value = terminalValue(winner, game.players[s.playerIdx]);
+      s.value = terminalValue(winner, state.players[s.playerIdx]);
     }
     for (let pi = 0; pi < 3; pi++) {
       const vs = emptySample(pi);
-      vs.state = encodeState(game, rulesOf(game), pi);
-      vs.value = terminalValue(winner, game.players[pi]);
+      vs.state = encodeState(state, api, pi);
+      vs.value = terminalValue(winner, state.players[pi]);
       gameSamples.push(vs);
     }
     writer.writeBatch(gameSamples);
 
-    recordOutcome(stats, winnerIndex(game), greedyIdx, false, game.turnCount);
-    logGame(`[${opType.padEnd(7)}]`, g, schedule.length, game, gameSamples.length, ((Date.now() - t0) / 1000).toFixed(1));
+    recordOutcome(stats, winnerIndex(api), greedyIdx, false, state.turnCount);
+    logGame(`[${opType.padEnd(7)}]`, g, schedule.length, api, gameSamples.length, ((Date.now() - t0) / 1000).toFixed(1));
   }
   daggerModel.dispose();
 
@@ -338,40 +342,43 @@ async function generateStalemate(name: string, dir: string, opts: Map<string, st
 
   log(`\nGenerating stalemate data: ${games} games of NN(${modelName}) vs Random still open at turn ${from}, ${label} DAgger turns each, greedy finish`);
   for (let g = 0; g < games; played++) {
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const nnIdx = played % 3;
     const t0 = Date.now();
-    while (!game.gameOver && game.turnCount < from) {
-      if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), model);
-      else randomTurn(GameAPI.of(game));
+    while (!api.isGameOver()) {
+      const state = api.getState();
+      if (state.turnCount >= from) break;
+      if (state.currentPlayerIndex === nnIdx) executeNNTurn(api, model);
+      else randomTurn(api);
     }
-    if (game.gameOver) continue;
+    if (api.isGameOver()) continue;
 
     const gameSamples: Sample[] = [];
     let labeled = 0;
-    while (!game.gameOver && labeled < label) {
-      if (game.currentPlayerIndex === nnIdx) { daggerTurn(GameAPI.of(game), model, gameSamples); labeled++; }
-      else randomTurn(GameAPI.of(game));
+    while (!api.isGameOver() && labeled < label) {
+      if (api.getState().currentPlayerIndex === nnIdx) { daggerTurn(api, model, gameSamples); labeled++; }
+      else randomTurn(api);
     }
-    while (!game.gameOver) {
-      if (game.currentPlayerIndex === nnIdx) greedyTurn(GameAPI.of(game));
-      else randomTurn(GameAPI.of(game));
+    while (!api.isGameOver()) {
+      if (api.getState().currentPlayerIndex === nnIdx) greedyTurn(api);
+      else randomTurn(api);
     }
 
-    const winner = game.winner?.name ?? "draw";
+    const state = api.getState();
+    const winner = api.getWinner() ?? "draw";
     for (const s of gameSamples) {
-      s.value = terminalValue(winner, game.players[s.playerIdx]);
+      s.value = terminalValue(winner, state.players[s.playerIdx]);
     }
     for (let pi = 0; pi < 3; pi++) {
       const vs = emptySample(pi);
-      vs.state = encodeState(game, rulesOf(game), pi);
-      vs.value = terminalValue(winner, game.players[pi]);
+      vs.state = encodeState(state, api, pi);
+      vs.value = terminalValue(winner, state.players[pi]);
       gameSamples.push(vs);
     }
     writer.writeBatch(gameSamples);
 
-    recordOutcome(stats, winnerIndex(game), nnIdx, false, game.turnCount);
-    logGame("[stale  ]", g, games, game, gameSamples.length, ((Date.now() - t0) / 1000).toFixed(1));
+    recordOutcome(stats, winnerIndex(api), nnIdx, false, state.turnCount);
+    logGame("[stale  ]", g, games, api, gameSamples.length, ((Date.now() - t0) / 1000).toFixed(1));
     g++;
   }
   model.dispose();

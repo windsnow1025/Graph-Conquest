@@ -14,9 +14,10 @@ import type {DecisionInfo, TurnOptions} from "../../../src/AI/TurnExecutor";
 import {ACTION_NAMES} from "../../../src/AI/nn/ActionSpace";
 import {BATTLE_TARGET_STOP} from "../../../src/AI/nn/NNModel";
 import {randomTurn} from "../../src/Opponents";
-import GameAPI from "../../../src/lib/GameAPI";
+import type GameAPI from "../../../src/lib/GameAPI";
+import {armyIdOf} from "../../../src/AI/nn/Armies";
 import {MAX_TURNS, MODEL_DIR_PHASE1, countNodes, createRandomizedGame} from "../../src/trainUtils";
-import type GameSystem from "../../../src/lib/GameSystem";
+import type {GameData} from "../../../src/lib/GameSystem";
 import * as path from "path";
 
 const modelDir = process.argv[2] ? path.resolve(process.argv[2]) : MODEL_DIR_PHASE1;
@@ -27,15 +28,14 @@ interface TurnStats {
   actions: Record<string, number>; moves: number; battles: number; stops: number; enemyEmptyReachable: number;
 }
 
-function enemyEmptyReachable(game: GameSystem, nnIdx: number): number {
+function enemyEmptyReachable(api: GameAPI, state: GameData, nnIdx: number): number {
   // Nodes owned by an opponent with no army on them, and some own army can move there this turn
-  const self = game.players[nnIdx];
-  const enemyLocations = game.enemyLocations;
+  const self = state.players[nnIdx];
+  const reachable = new Set(self.armies.flatMap(army => api.getMovableLocations(armyIdOf(self.name, army))));
   let count = 0;
-  for (const [node, owner] of game.nodeOwnership) {
+  for (const [node, owner] of state.nodeOwnership) {
     if (owner === null || owner === self) continue;
-    if (enemyLocations.has(node)) continue;
-    if (self.armies.some(a => a.getMoveCandidates(node, game.gameMap, enemyLocations).length > 0)) count++;
+    if (reachable.has(node)) count++;
   }
   return count;
 }
@@ -47,7 +47,7 @@ async function main() {
 
   let wins = 0, draws = 0, losses = 0;
   for (let g = 0; g < numGames; g++) {
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const nnIdx = g % 3;
     const nnName = ["Blue", "Red", "Green"][nnIdx];
     const history: TurnStats[] = [];
@@ -68,26 +68,27 @@ async function main() {
       },
     };
 
-    for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex === nnIdx) {
-        const self = game.players[nnIdx];
+    for (let turn = 0; turn < MAX_TURNS * 3 && !api.isGameOver(); turn++) {
+      const state = api.getState();
+      if (state.currentPlayerIndex === nnIdx) {
+        const self = state.players[nnIdx];
         current = {
-          turn: game.turnCount, units: self.armies.reduce((s, a) => s + a.units.length, 0), nodes: countNodes(game, self),
+          turn: state.turnCount, units: self.armies.reduce((s, a) => s + a.units.length, 0), nodes: countNodes(state, self),
           money: self.money, maxFeature: 0, actions: {}, moves: 0, battles: 0, stops: 0,
-          enemyEmptyReachable: enemyEmptyReachable(game, nnIdx),
+          enemyEmptyReachable: enemyEmptyReachable(api, state, nnIdx),
         };
-        executeNNTurn(GameAPI.of(game), model, opts);
+        executeNNTurn(api, model, opts);
         history.push(current);
         current = null;
       } else {
-        randomTurn(GameAPI.of(game));
+        randomTurn(api);
       }
     }
 
-    const winner = game.winner?.name ?? "draw";
+    const winner = api.getWinner() ?? "draw";
     if (winner === "draw") draws++; else if (winner === nnName) wins++; else losses++;
     const last = history[history.length - 1];
-    console.log(`Game ${g + 1}/${numGames} (${nnName}): ${winner} T${game.turnCount} units=${last.units} nodes=${last.nodes} money=${last.money} maxFeature=${last.maxFeature.toFixed(2)}`);
+    console.log(`Game ${g + 1}/${numGames} (${nnName}): ${winner} T${api.getState().turnCount} units=${last.units} nodes=${last.nodes} money=${last.money} maxFeature=${last.maxFeature.toFixed(2)}`);
     if (winner === "draw") {
       for (const h of history) {
         if (h.turn % 10 !== 1 && h.turn !== history.length) continue;

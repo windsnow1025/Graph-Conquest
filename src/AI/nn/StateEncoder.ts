@@ -22,7 +22,6 @@
  *
  * Total: 5 + 18 + 21 + 1024 + 292 = 1360 features.
  */
-import type GameSystem from "../../lib/GameSystem";
 import type {GameData} from "../../lib/GameSystem";
 import type {ArmyData} from "../../lib/Army";
 import type {UnitData} from "../../lib/Unit";
@@ -81,21 +80,6 @@ export const BSEL_COMMIT_MASK_OFF = ARMY_INFO_FEATURES + NUM_NODES + SELECTION_S
 // ─── The rules the encoder asks the game: upkeep and distance ───
 
 export type Rules = Pick<GameAPI, "getUpkeep" | "getDistance">;
-
-// Transitional, until every caller holds a GameAPI: the rules of an engine, one object per engine so that the distance matrix cache holds
-const engineRules = new WeakMap<GameSystem, Rules>();
-
-export function rulesOf(game: GameSystem): Rules {
-  let rules = engineRules.get(game);
-  if (!rules) {
-    rules = {
-      getUpkeep: owner => game.getUpkeep(game.allPlayers.find(player => player.name === owner)!),
-      getDistance: (from, to) => game.gameMap.getDistance(from, to),
-    };
-    engineRules.set(game, rules);
-  }
-  return rules;
-}
 
 // ─── Precomputed distance matrix cache, one per rules object ───
 let cachedDistMatrix: Float32Array | null = null;

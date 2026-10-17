@@ -3,7 +3,6 @@
  */
 import {NNModel} from "../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "./nodeIO";
-import GameSystem from "../../src/lib/GameSystem";
 import type {GameData} from "../../src/lib/GameSystem";
 import type {PlayerData} from "../../src/lib/Player";
 import DefaultConfig from "../../src/lib/data/DefaultConfig";
@@ -82,8 +81,8 @@ export function createRandomizedConfig(): GameConfig {
   };
 }
 
-export function createRandomizedGame(): GameSystem {
-  return new GameSystem(createRandomizedConfig());
+export function createRandomizedGame(): GameAPI {
+  return GameAPI.create(createRandomizedConfig());
 }
 
 // ─── Seeded randomness ───
@@ -276,23 +275,25 @@ export async function testNNvsRandom(modelDir: string, games: number = TEST_GAME
 
   let wins = 0, losses = 0, draws = 0, winTurnSum = 0;
   for (let g = 0; g < games; g++) {
-    const game = createRandomizedGame();
+    const api = createRandomizedGame();
     const nnIdx = g % 3;
-    for (let turn = 0; turn < MAX_TURNS * 3 && !game.gameOver; turn++) {
-      if (game.currentPlayerIndex === nnIdx) executeNNTurn(GameAPI.of(game), testModel);
-      else randomTurn(GameAPI.of(game));
+    for (let turn = 0; turn < MAX_TURNS * 3 && !api.isGameOver(); turn++) {
+      if (api.getState().currentPlayerIndex === nnIdx) executeNNTurn(api, testModel);
+      else randomTurn(api);
     }
-    const scores = [0, 1, 2].map(i => scorePlayer(GameAPI.of(game), constantsOf(game), i));
-    const units = game.players.map(p => p.armies.reduce((s, a) => s + a.units.length, 0));
-    const nodes = game.players.map(p => countNodes(game, p));
-    const winner = game.winner?.name ?? "draw";
+    const state = api.getState();
+    const constants = constantsOf(state);
+    const scores = [0, 1, 2].map(i => scorePlayer(api, constants, i));
+    const units = state.players.map(p => p.armies.reduce((s, a) => s + a.units.length, 0));
+    const nodes = state.players.map(p => countNodes(state, p));
+    const winner = api.getWinner() ?? "draw";
     const nnName = ["Blue", "Red", "Green"][nnIdx];
     if (winner === "draw") draws++;
-    else if (winner === nnName) { wins++; winTurnSum += game.turnCount; }
+    else if (winner === nnName) { wins++; winTurnSum += state.turnCount; }
     else losses++;
     const posName = ["B", "R", "G"][nnIdx];
     logRaw(
-      `  Test ${g + 1}/${games} (${posName}): ${winner.padEnd(5)} T${String(game.turnCount).padEnd(3)} ` +
+      `  Test ${g + 1}/${games} (${posName}): ${winner.padEnd(5)} T${String(state.turnCount).padEnd(3)} ` +
       `scores=[${scores.map(s => String(s.toFixed(0)).padStart(4)).join(",")}] ` +
       `nodes=[${nodes.map(n => String(n).padStart(2)).join(",")}] ` +
       `units=[${units.map(u => String(u).padStart(3)).join(",")}]`
