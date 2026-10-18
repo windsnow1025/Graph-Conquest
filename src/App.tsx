@@ -31,9 +31,9 @@ const NO_PLAYERS = new Set<string>();
 const overlayPaper = {opacity: 0.9, pointerEvents: "auto" as const};
 
 /** The army a state holds under an identifier, or null when its units have all left. */
-function findArmy(state: GameData, id: ArmyId): ArmyData | null {
-  const player = [...state.players, state.neutralPlayer].find(p => p.name === id.owner);
-  return player?.armies.find(army => army.location === id.location && army.unitType === id.unitType) ?? null;
+function findArmy(state: GameData, armyId: ArmyId): ArmyData | null {
+  const player = [...state.players, state.neutralPlayer].find(p => p.name === armyId.owner);
+  return player?.armies.find(army => army.location === armyId.location && army.unitType === armyId.unitType) ?? null;
 }
 
 function countOf(selections: UnitSelection[]): number {
@@ -43,7 +43,7 @@ function countOf(selections: UnitSelection[]): number {
 function App() {
   const apiRef = useRef(GameAPI.create(DefaultConfig));
   const [version, setVersion] = useState(0);
-  const [selectedArmy, setSelectedArmy] = useState<ArmyId | null>(null);
+  const [selectedArmyId, setSelectedArmyId] = useState<ArmyId | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [gameMode, setGameMode] = useState<GameMode>("menu");
   const [gameEpoch, setGameEpoch] = useState(0); // bumped when apiRef is replaced, so game-bound effects restart
@@ -62,9 +62,9 @@ function App() {
   const [battlePicked, setBattlePicked] = useState<Map<string, ArmySelection>>(new Map());
 
   // In-battle attack allocation
-  const [battleAttackArmy, setBattleAttackArmy] = useState<ArmyId | null>(null);
+  const [battleAttackArmyId, setBattleAttackArmyId] = useState<ArmyId | null>(null);
   const [battleAllocations, setBattleAllocations] = useState<AttackAllocation[]>([]);
-  const [battleAllocTarget, setBattleAllocTarget] = useState<ArmyId | null>(null);
+  const [battleAllocTargetId, setBattleAllocTargetId] = useState<ArmyId | null>(null);
   const [battleAllocCount, setBattleAllocCount] = useState(1);
 
   // Save/Load
@@ -84,7 +84,7 @@ function App() {
   }, []);
 
   const clearSelection = useCallback(() => {
-    setSelectedArmy(null);
+    setSelectedArmyId(null);
     setSelectedNode(null);
     setSelectedUnits([]);
     setBattleTarget(null);
@@ -92,9 +92,9 @@ function App() {
   }, []);
 
   const clearBattleAttack = useCallback(() => {
-    setBattleAttackArmy(null);
+    setBattleAttackArmyId(null);
     setBattleAllocations([]);
-    setBattleAllocTarget(null);
+    setBattleAllocTargetId(null);
     setBattleAllocCount(1);
   }, []);
 
@@ -170,10 +170,10 @@ function App() {
     // The attacker is never auto-played: acting would foreclose the retreat decision.
     if (battle.phase === BattlePhase.DefenderTurn
       && battle.attackerArmies.length === 1 && battle.defenderArmies.length === 1) {
-      const army = armyIdOf(battle.defenderPlayer.name, battle.defenderArmies[0]);
-      const target = armyIdOf(battle.attackerPlayer.name, battle.attackerArmies[0]);
-      if (apiRef.current.canAct(army)) {
-        apiRef.current.allocateAttack(army, [{target, count: battleUnits(battle.defenderArmies[0]).length}]);
+      const armyId = armyIdOf(battle.defenderPlayer.name, battle.defenderArmies[0]);
+      const targetId = armyIdOf(battle.attackerPlayer.name, battle.attackerArmies[0]);
+      if (apiRef.current.canAct(armyId)) {
+        apiRef.current.allocateAttack(armyId, [{targetId, count: battleUnits(battle.defenderArmies[0]).length}]);
         clearBattleAttack();
         update();
         return;
@@ -273,18 +273,18 @@ function App() {
     }
   }
   // The army the player is allocating attacks from, while it can still act
-  const attackingArmy = battle && battleAttackArmy && api.canAct(battleAttackArmy) ? battleAttackArmy : null;
-  const allocatedTargets = new Set(battleAllocations.map(allocation => keyOfId(allocation.target)));
-  const battleTargets = attackingArmy && !battleAllocTarget
-    ? new Set(api.getTargetsInRange(attackingArmy).map(keyOfId).filter(key => !allocatedTargets.has(key)))
+  const attackingArmyId = battle && battleAttackArmyId && api.canAct(battleAttackArmyId) ? battleAttackArmyId : null;
+  const allocatedTargets = new Set(battleAllocations.map(allocation => keyOfId(allocation.targetId)));
+  const battleTargets = attackingArmyId && !battleAllocTargetId
+    ? new Set(api.getTargetsInRange(attackingArmyId).map(keyOfId).filter(key => !allocatedTargets.has(key)))
     : new Set<string>();
 
-  const battleRemaining = attackingArmy
-    ? battleUnits(findArmy(state, attackingArmy)!).length - battleAllocations.reduce((sum, allocation) => sum + allocation.count, 0)
+  const battleRemaining = attackingArmyId
+    ? battleUnits(findArmy(state, attackingArmyId)!).length - battleAllocations.reduce((sum, allocation) => sum + allocation.count, 0)
     : 0;
 
   // --- Click handlers ---
-  const attackableLocations = !battle && !battleTarget && !selectedArmy && !isAITurn ? api.getAttackableLocations() : new Set<string>();
+  const attackableLocations = !battle && !battleTarget && !selectedArmyId && !isAITurn ? api.getAttackableLocations() : new Set<string>();
 
   const handleNodeClick = useCallback((location: string) => {
     if (battle || isAITurn) return;
@@ -297,16 +297,16 @@ function App() {
     }
 
     // Move selected army to clicked node
-    if (selectedArmy && selectedArmy.owner === currentPlayer.name) {
-      apiRef.current.moveUnits(selectedArmy, selectedUnits, location);
+    if (selectedArmyId && selectedArmyId.owner === currentPlayer.name) {
+      apiRef.current.moveUnits(selectedArmyId, selectedUnits, location);
       clearSelection();
       update();
       return;
     }
 
     // Click attackable enemy node → enter battle targeting
-    if (!selectedArmy && apiRef.current.getAttackableLocations().has(location)) {
-      setSelectedArmy(null);
+    if (!selectedArmyId && apiRef.current.getAttackableLocations().has(location)) {
+      setSelectedArmyId(null);
       setSelectedNode(null);
       setBattleTarget(location);
       setBattlePicked(new Map());
@@ -314,29 +314,29 @@ function App() {
     }
 
     // Select node (for recruit UI etc.)
-    setSelectedArmy(null);
+    setSelectedArmyId(null);
     setSelectedNode(location);
-  }, [battle, isAITurn, selectedArmy, currentPlayer, selectedUnits, battleTarget, update, clearSelection]);
+  }, [battle, isAITurn, selectedArmyId, currentPlayer, selectedUnits, battleTarget, update, clearSelection]);
 
-  const handleArmyClick = useCallback((id: ArmyId) => {
+  const handleArmyClick = useCallback((armyId: ArmyId) => {
     if (isAITurn) return;
     const a = apiRef.current;
     const current = a.getState();
-    const key = keyOfId(id);
+    const key = keyOfId(armyId);
 
     if (current.currentBattle) {
-      if (a.canAct(id)) {
-        setBattleAttackArmy(id);
+      if (a.canAct(armyId)) {
+        setBattleAttackArmyId(armyId);
         setBattleAllocations([]);
-        setBattleAllocTarget(null);
+        setBattleAllocTargetId(null);
         setBattleAllocCount(1);
         return;
       }
-      if (attackingArmy && battleRemaining > 0) {
-        const targets = a.getTargetsInRange(attackingArmy);
-        if (targets.some(target => keyOfId(target) === key) && !battleAllocations.some(allocation => keyOfId(allocation.target) === key)) {
-          const needed = a.getUnitsNeeded(attackingArmy, id);
-          setBattleAllocTarget(id);
+      if (attackingArmyId && battleRemaining > 0) {
+        const targets = a.getTargetsInRange(attackingArmyId);
+        if (targets.some(targetId => keyOfId(targetId) === key) && !battleAllocations.some(allocation => keyOfId(allocation.targetId) === key)) {
+          const needed = a.getUnitsNeeded(attackingArmyId, armyId);
+          setBattleAllocTargetId(armyId);
           setBattleAllocCount(Math.min(needed, battleRemaining));
           return;
         }
@@ -344,15 +344,15 @@ function App() {
       return;
     }
 
-    const army = findArmy(current, id);
+    const army = findArmy(current, armyId);
     if (!army) return;
-    const own = id.owner === current.players[current.currentPlayerIndex].name;
+    const own = armyId.owner === current.players[current.currentPlayerIndex].name;
     if (battleTarget && own) {
       if (!a.getArmiesInRange(battleTarget).some(inRange => keyOfId(inRange) === key)) return;
       setBattlePicked((prev) => {
         const next = new Map(prev);
         if (next.has(key)) next.delete(key);
-        else next.set(key, {army: id, selections: selectionsOf(attackReady(army))});
+        else next.set(key, {armyId, selections: selectionsOf(attackReady(army))});
         return next;
       });
       return;
@@ -360,10 +360,10 @@ function App() {
 
     // Click enemy army → treat as clicking the node (enter targeting if attackable)
     if (!own) {
-      if (!battleTarget && !selectedArmy && a.getAttackableLocations().has(id.location)) {
-        setSelectedArmy(null);
+      if (!battleTarget && !selectedArmyId && a.getAttackableLocations().has(armyId.location)) {
+        setSelectedArmyId(null);
         setSelectedNode(null);
-        setBattleTarget(id.location);
+        setBattleTarget(armyId.location);
         setBattlePicked(new Map());
       }
       return;
@@ -372,20 +372,20 @@ function App() {
     // Click own army → select it
     setBattleTarget(null);
     setBattlePicked(new Map());
-    setSelectedArmy(id);
+    setSelectedArmyId(armyId);
     setSelectedUnits(selectionsOf(army.units));
     setSelectedNode(null);
-  }, [isAITurn, battleTarget, selectedArmy, attackingArmy, battleRemaining, battleAllocations]);
+  }, [isAITurn, battleTarget, selectedArmyId, attackingArmyId, battleRemaining, battleAllocations]);
 
   // --- Army actions ---
   const handleDisband = useCallback(() => {
-    if (!selectedArmy) return;
-    apiRef.current.disbandUnits(selectedArmy, selectedUnits);
-    const army = findArmy(apiRef.current.getState(), selectedArmy);
+    if (!selectedArmyId) return;
+    apiRef.current.disbandUnits(selectedArmyId, selectedUnits);
+    const army = findArmy(apiRef.current.getState(), selectedArmyId);
     if (!army) clearSelection();
     else setSelectedUnits(selectionsOf(army.units));
     update();
-  }, [selectedArmy, selectedUnits, update, clearSelection]);
+  }, [selectedArmyId, selectedUnits, update, clearSelection]);
 
   // --- Battle actions ---
   const handleStartBattle = useCallback(() => {
@@ -397,18 +397,18 @@ function App() {
   }, [battleTarget, battlePicked, update, clearSelection, clearBattleAttack]);
 
   const handleBattleAllocate = useCallback(() => {
-    if (!battleAllocTarget) return;
-    setBattleAllocations(prev => [...prev, {target: battleAllocTarget, count: battleAllocCount}]);
-    setBattleAllocTarget(null);
+    if (!battleAllocTargetId) return;
+    setBattleAllocations(prev => [...prev, {targetId: battleAllocTargetId, count: battleAllocCount}]);
+    setBattleAllocTargetId(null);
     setBattleAllocCount(1);
-  }, [battleAllocTarget, battleAllocCount]);
+  }, [battleAllocTargetId, battleAllocCount]);
 
   const handleBattleConfirm = useCallback(() => {
-    if (!battleAttackArmy || !battle) return;
-    apiRef.current.allocateAttack(battleAttackArmy, battleAllocations);
+    if (!battleAttackArmyId || !battle) return;
+    apiRef.current.allocateAttack(battleAttackArmyId, battleAllocations);
     clearBattleAttack();
     update();
-  }, [battle, battleAttackArmy, battleAllocations, update, clearBattleAttack]);
+  }, [battle, battleAttackArmyId, battleAllocations, update, clearBattleAttack]);
 
 
   const handleBattleRetreat = useCallback(() => {
@@ -422,10 +422,10 @@ function App() {
   const handleBattleAttackAll = useCallback(() => {
     if (!battle) return;
     if (battle.attackerArmies.length !== 1 || battle.defenderArmies.length !== 1) return;
-    const army = armyIdOf(battle.attackerPlayer.name, battle.attackerArmies[0]);
-    const target = armyIdOf(battle.defenderPlayer.name, battle.defenderArmies[0]);
-    if (apiRef.current.canAct(army)) {
-      apiRef.current.allocateAttack(army, [{target, count: battleUnits(battle.attackerArmies[0]).length}]);
+    const armyId = armyIdOf(battle.attackerPlayer.name, battle.attackerArmies[0]);
+    const targetId = armyIdOf(battle.defenderPlayer.name, battle.defenderArmies[0]);
+    if (apiRef.current.canAct(armyId)) {
+      apiRef.current.allocateAttack(armyId, [{targetId, count: battleUnits(battle.attackerArmies[0]).length}]);
     }
     clearBattleAttack();
     update();
@@ -437,15 +437,15 @@ function App() {
     return <ModeSelect onSelect={handleModeSelect}/>;
   }
 
-  const canvasSelectedArmy = battle ? battleAttackArmy : selectedArmy;
+  const canvasSelectedArmyId = battle ? battleAttackArmyId : selectedArmyId;
 
   const canvasHighlightPulse = battle
-    ? (battleAttackArmy ? new Set<string>() : battleUnacted)
+    ? (battleAttackArmyId ? new Set<string>() : battleUnacted)
     : battleTarget ? armiesInRange : new Set<string>();
   const canvasHighlightSolid = battle
     ? new Set([
         ...allocatedTargets,
-        ...(battleAllocTarget ? [keyOfId(battleAllocTarget)] : []),
+        ...(battleAllocTargetId ? [keyOfId(battleAllocTargetId)] : []),
       ])
     : new Set(battlePicked.keys());
 
@@ -456,12 +456,12 @@ function App() {
   const recruitCountClamped = Math.min(recruitCount, maxRecruit);
 
   // Own army selected (not in battle)
-  const ownArmy = !battle && !isAITurn && selectedArmy && selectedArmy.owner === currentPlayer.name ? findArmy(state, selectedArmy) : null;
+  const ownArmy = !battle && !isAITurn && selectedArmyId && selectedArmyId.owner === currentPlayer.name ? findArmy(state, selectedArmyId) : null;
   const selectedCount = countOf(selectedUnits);
   // Nodes every selected unit can reach: the units of one state share their remaining moves
-  const moveDestinations = ownArmy && selectedArmy && selectedCount > 0
-    ? new Set(api.getMovableLocations(selectedArmy).filter((location) => {
-        const candidates = api.getMoveCandidates(selectedArmy, location);
+  const moveDestinations = ownArmy && selectedArmyId && selectedCount > 0
+    ? new Set(api.getMovableLocations(selectedArmyId).filter((location) => {
+        const candidates = api.getMoveCandidates(selectedArmyId, location);
         return selectedUnits.every((selection) => candidates.some((unit) => sameState(unit, selection)));
       }))
     : new Set<string>();
@@ -482,14 +482,14 @@ function App() {
           api={api}
           state={state}
           version={version}
-          selectedArmy={canvasSelectedArmy}
+          selectedArmyId={canvasSelectedArmyId}
           selectedNode={selectedNode}
           moveDestinations={moveDestinations}
           highlightPulse={canvasHighlightPulse}
           highlightSolid={canvasHighlightSolid}
           targetPulse={battleTargets}
           attackableLocations={attackableLocations}
-          battleAllocationDisplay={battleAttackArmy ? battleAllocations.map(({target, count}) => ({attacker: battleAttackArmy, target, unitCount: count})) : []}
+          battleAllocationDisplay={battleAttackArmyId ? battleAllocations.map(({targetId, count}) => ({attackerId: battleAttackArmyId, targetId, unitCount: count})) : []}
           battleRemaining={battleRemaining}
           onNodeClick={handleNodeClick}
           onArmyClick={handleArmyClick}
@@ -584,13 +584,13 @@ function App() {
           const ready = picked.length > 0 && picked.every(({selections}) => countOf(selections) > 0);
           return (
             <Paper elevation={3} sx={{position: "absolute", left: pos.left, top: pos.top + 45 * pos.scale, transform: "translateX(-50%)", p: 1, ...overlayPaper, display: "flex", flexDirection: "column", gap: 1, width: 420}}>
-              {picked.map(({army: id, selections}) => {
-                const army = findArmy(state, id);
+              {picked.map(({armyId, selections}) => {
+                const army = findArmy(state, armyId);
                 if (!army) return null;
                 return (
-                  <Box key={keyOfId(id)}>
-                    <Typography variant="caption" sx={{fontWeight: "bold"}}>{id.unitType} at {id.location}</Typography>
-                    <UnitPicker units={attackReady(army)} selected={selections} onChange={(next) => setBattlePicked(prev => new Map(prev).set(keyOfId(id), {army: id, selections: next}))}/>
+                  <Box key={keyOfId(armyId)}>
+                    <Typography variant="caption" sx={{fontWeight: "bold"}}>{armyId.unitType} at {armyId.location}</Typography>
+                    <UnitPicker units={attackReady(army)} selected={selections} onChange={(next) => setBattlePicked(prev => new Map(prev).set(keyOfId(armyId), {armyId, selections: next}))}/>
                   </Box>
                 );
               })}
@@ -645,7 +645,7 @@ function App() {
         )}
 
         {/* Battle action overlay — positioned below target node */}
-        {battle && !battleAttackArmy && !isAITurn
+        {battle && !battleAttackArmyId && !isAITurn
           && battle.phase === BattlePhase.AttackerTurn && battle.actedArmies.size === 0 && (() => {
           const pos = getNodeScreenPos(battle.targetLocation);
           if (!pos) return null;
@@ -661,10 +661,10 @@ function App() {
         })()}
 
         {/* Send allocation slider — positioned above target army's node */}
-        {attackingArmy && battleAllocTarget && battleRemaining > 0 && (() => {
-          const pos = getNodeScreenPos(battleAllocTarget.location);
+        {attackingArmyId && battleAllocTargetId && battleRemaining > 0 && (() => {
+          const pos = getNodeScreenPos(battleAllocTargetId.location);
           if (!pos) return null;
-          const needed = api.getUnitsNeeded(attackingArmy, battleAllocTarget);
+          const needed = api.getUnitsNeeded(attackingArmyId, battleAllocTargetId);
           const sliderMax = Math.min(battleRemaining, needed);
           return (
             <Paper elevation={3} sx={{position: "absolute", left: pos.left, top: pos.top - 90 * pos.scale, transform: "translateX(-50%)", p: 1, ...overlayPaper, width: 280}}>
@@ -683,13 +683,13 @@ function App() {
         })()}
 
         {/* Confirm Attack / Reset — positioned below target node */}
-        {battle && attackingArmy && battleAllocations.length > 0 && !battleAllocTarget && (() => {
+        {battle && attackingArmyId && battleAllocations.length > 0 && !battleAllocTargetId && (() => {
           const pos = getNodeScreenPos(battle.targetLocation);
           if (!pos) return null;
           return (
             <Paper elevation={3} sx={{position: "absolute", left: pos.left, top: pos.top + 45 * pos.scale, transform: "translateX(-50%)", p: 1, ...overlayPaper, display: "flex", gap: 0.5}}>
               <Button variant="contained" size="small" sx={{textTransform: "none"}} onClick={handleBattleConfirm}>Confirm</Button>
-              <Button variant="outlined" size="small" sx={{textTransform: "none"}} onClick={() => { setBattleAllocations([]); setBattleAllocTarget(null); }}>Reset</Button>
+              <Button variant="outlined" size="small" sx={{textTransform: "none"}} onClick={() => { setBattleAllocations([]); setBattleAllocTargetId(null); }}>Reset</Button>
             </Paper>
           );
         })()}

@@ -85,17 +85,17 @@ function randomBattleAllocate(api: GameAPI, battle: BattleData, isAttacker: bool
     let remaining = battleUnits(army).length;
     const allocations: AttackAllocation[] = [];
 
-    for (const target of targets) {
+    for (const targetId of targets) {
       if (remaining <= 0) break;
       // 70% chance to attack each target
       if (Math.random() < 0.3) continue;
 
-      const killNeeded = api.getUnitsNeeded(armyId, target);
+      const killNeeded = api.getUnitsNeeded(armyId, targetId);
       const fraction = 0.5 + Math.random() * 0.5; // 50%-100% of kill amount
       let unitCount = Math.max(1, Math.round(fraction * killNeeded));
       unitCount = Math.min(unitCount, remaining);
       if (unitCount > 0) {
-        allocations.push({target, count: unitCount});
+        allocations.push({targetId, count: unitCount});
         remaining -= unitCount;
       }
     }
@@ -149,7 +149,7 @@ function randomBattlePhase(api: GameAPI): void {
       for (const army of armies) {
         if (!candidates.has(keyOf(army))) continue;
         if (Math.random() < 0.6) {
-          attackers.push({army: armyIdOf(owner, army), selections: selectionsOf(attackReady(army))});
+          attackers.push({armyId: armyIdOf(owner, army), selections: selectionsOf(attackReady(army))});
         }
       }
       if (attackers.length === 0) continue;

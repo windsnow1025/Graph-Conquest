@@ -227,14 +227,14 @@ function* battleAllocatePhase(
           // NN under-allocating — force full allocation to this and all remaining targets
           const send = Math.min(killNeeded, remaining);
           if (send > 0) {
-            allocations.push({target: armyIdOf(enemyOwner, target), count: send});
+            allocations.push({targetId: armyIdOf(enemyOwner, target), count: send});
             remaining -= send;
           }
           for (let tj = ti + 1; tj < targets.length; tj++) {
             if (remaining <= 0) break;
             const futureSend = Math.min(unitsNeeded(targets[tj]), remaining);
             if (futureSend > 0) {
-              allocations.push({target: armyIdOf(enemyOwner, targets[tj]), count: futureSend});
+              allocations.push({targetId: armyIdOf(enemyOwner, targets[tj]), count: futureSend});
               remaining -= futureSend;
             }
           }
@@ -245,7 +245,7 @@ function* battleAllocatePhase(
       let unitCount = Math.round(kf * killNeeded);
       unitCount = Math.min(unitCount, remaining);
       if (unitCount > 0) {
-        allocations.push({target: armyIdOf(enemyOwner, target), count: unitCount});
+        allocations.push({targetId: armyIdOf(enemyOwner, target), count: unitCount});
         remaining -= unitCount;
       }
     }
@@ -351,7 +351,7 @@ function selectBattleArmies(
     remaining.splice(remaining.indexOf(chosen.army), 1);
   }
 
-  return [...selected].map(([army, units]) => ({army: armyIdOf(owner, army), selections: selectionsOf(units)}));
+  return [...selected].map(([army, units]) => ({armyId: armyIdOf(owner, army), selections: selectionsOf(units)}));
 }
 
 function* battlePhase(

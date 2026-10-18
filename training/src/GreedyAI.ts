@@ -104,12 +104,12 @@ function quantile(api: GameAPI, constants: GameConstants, playerIdx: number): nu
 
 /** Every army with all of its attack-ready units. */
 function fullSelections(owner: string, armies: ArmyData[]): ArmySelection[] {
-  return armies.map(army => ({army: armyIdOf(owner, army), selections: selectionsOf(attackReady(army))}));
+  return armies.map(army => ({armyId: armyIdOf(owner, army), selections: selectionsOf(attackReady(army))}));
 }
 
 /** The attackers of a battle: chosen armies, each with its chosen units. */
 function attackersOf(owner: string, chosen: Iterable<readonly [ArmyData, UnitData[]]>): ArmySelection[] {
-  return [...chosen].map(([army, units]) => ({army: armyIdOf(owner, army), selections: selectionsOf(units)}));
+  return [...chosen].map(([army, units]) => ({armyId: armyIdOf(owner, army), selections: selectionsOf(units)}));
 }
 
 /** The player's armies in range of a location, in army order. */
@@ -234,11 +234,11 @@ function simpleBattleAllocate(api: GameAPI, battle: BattleData, isAttacker: bool
     const targets = api.getTargetsInRange(armyId);
     let remaining = battleUnits(army).length;
     const allocations: AttackAllocation[] = [];
-    for (const target of targets) {
+    for (const targetId of targets) {
       if (remaining <= 0) break;
-      const killNeeded = api.getUnitsNeeded(armyId, target);
+      const killNeeded = api.getUnitsNeeded(armyId, targetId);
       const unitCount = Math.min(killNeeded, remaining);
-      if (unitCount > 0) allocations.push({target, count: unitCount});
+      if (unitCount > 0) allocations.push({targetId, count: unitCount});
       remaining -= killNeeded;
     }
     // Always submit (empty = pass) so the army is marked acted; reject = broken invariant
@@ -481,7 +481,7 @@ function* lookaheadBattleAllocate(
         if (unitCount > remaining) continue;
         const c = api.fork();
         const trial = [...allocations];
-        if (unitCount > 0) trial.push({target: armyIdOf(enemyOwner, target), count: unitCount});
+        if (unitCount > 0) trial.push({targetId: armyIdOf(enemyOwner, target), count: unitCount});
         if (trial.length > 0) c.allocateAttack(armyId, trial);
         simpleBattleLoop(c);
         // A defender evaluates its own turn: the attacker and anyone between pass first
@@ -505,14 +505,14 @@ function* lookaheadBattleAllocate(
         // Under-allocating — force full allocation to this and all remaining targets
         const send = Math.min(killNeeded, remaining);
         if (send > 0) {
-          allocations.push({target: armyIdOf(enemyOwner, target), count: send});
+          allocations.push({targetId: armyIdOf(enemyOwner, target), count: send});
           remaining -= send;
         }
         for (let tj = ti + 1; tj < targets.length; tj++) {
           if (remaining <= 0) break;
           const futureSend = Math.min(unitsNeeded(targets[tj]), remaining);
           if (futureSend > 0) {
-            allocations.push({target: armyIdOf(enemyOwner, targets[tj]), count: futureSend});
+            allocations.push({targetId: armyIdOf(enemyOwner, targets[tj]), count: futureSend});
             remaining -= futureSend;
           }
         }
@@ -521,7 +521,7 @@ function* lookaheadBattleAllocate(
 
       const unitCount = Math.min(Math.round(bestFrac * killNeeded), remaining);
       if (unitCount > 0) {
-        allocations.push({target: armyIdOf(enemyOwner, target), count: unitCount});
+        allocations.push({targetId: armyIdOf(enemyOwner, target), count: unitCount});
         remaining -= unitCount;
       }
     }
