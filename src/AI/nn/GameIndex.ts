@@ -3,7 +3,7 @@
  * encoder (feature positions), the categorical heads (class indices) and the
  * action space (target node lookup).
  */
-import type {DefaultUnitName} from "../../lib/data/DefaultUnitStatsMap.ts";
+import type {DefaultUnitName} from "../../lib/data/DefaultUnitStatsMap";
 
 export const NODE_ORDER: string[] = [
   "Blue Home", "Blue to Center", "B to G", "B to R",

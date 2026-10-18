@@ -24,7 +24,7 @@
  */
 import type {GameData, ArmyData, UnitData} from "../../lib/GameAPI";
 import type GameAPI from "../../lib/GameAPI";
-import type {DefaultUnitName} from "../../lib/data/DefaultUnitStatsMap.ts";
+import type {DefaultUnitName} from "../../lib/data/DefaultUnitStatsMap";
 import {NODE_ORDER, NUM_NODES, UNIT_TYPES, NUM_UNIT_TYPES} from "./GameIndex";
 import {battleUnits} from "./Armies";
 import {NUM_UNIT_GROUPS, NUM_MOVE_GROUPS, NUM_COMMIT_GROUPS, NUM_DISBAND_GROUPS, groupCounts} from "./UnitGroups";
