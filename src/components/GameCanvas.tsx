@@ -1,10 +1,7 @@
 import {useEffect, useRef, useState} from "react";
 import {Application, Graphics, Text, Container, TextStyle, FederatedPointerEvent, Ticker, Rectangle} from "pixi.js";
 import type GameAPI from "../lib/GameAPI";
-import type {ArmyId} from "../lib/GameAPI";
-import type {GameData} from "../lib/GameSystem";
-import type {PlayerData} from "../lib/Player";
-import type {ArmyData} from "../lib/Army";
+import type {ArmyId, GameData, PlayerData, ArmyData} from "../lib/GameAPI";
 import {armyIdOf, keyOfId, attackReady, battleUnits} from "../AI/nn/Armies";
 import mapLayout, {type NodeType} from "../data/MapLayout";
 import {playerColors} from "../data/PlayerColors";

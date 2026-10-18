@@ -20,11 +20,8 @@
  *   endTurn
  */
 import type GameAPI from "../lib/GameAPI";
-import type {ArmySelection, AttackAllocation} from "../lib/GameAPI";
-import type {ArmyData} from "../lib/Army";
-import type {UnitData} from "../lib/Unit";
-import type {BattleData} from "../lib/Battle";
-import {BattlePhase} from "../lib/Battle";
+import type {ArmySelection, AttackAllocation, ArmyData, UnitData, BattleData} from "../lib/GameAPI";
+import {BattlePhase} from "../lib/GameAPI";
 import type {NNModel, NNPrediction} from "./nn/NNModel";
 import {
   applyMaskAndSoftmax, softmax, argmax, expectedFractions, groupLogits, sampleFromProbs, BATTLE_TARGET_DIM, BATTLE_TARGET_STOP,

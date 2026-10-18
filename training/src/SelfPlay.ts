@@ -26,7 +26,7 @@ import type {Sample} from "./SampleTypes";
 import {emptySample, terminalValue} from "./SampleTypes";
 import {randomTurn} from "./Opponents";
 import type GameAPI from "../../src/lib/GameAPI";
-import type {GameData} from "../../src/lib/GameSystem";
+import type {GameData} from "../../src/lib/GameAPI";
 
 export interface RawRecord {
   playerIdx: number;

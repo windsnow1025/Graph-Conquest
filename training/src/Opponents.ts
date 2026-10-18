@@ -11,10 +11,8 @@
  * - random: coin flip at every decision point
  */
 import type GameAPI from "../../src/lib/GameAPI";
-import type {ArmySelection, AttackAllocation} from "../../src/lib/GameAPI";
-import type {ArmyData} from "../../src/lib/Army";
-import type {BattleData} from "../../src/lib/Battle";
-import {BattlePhase} from "../../src/lib/Battle";
+import type {ArmySelection, AttackAllocation, ArmyData, BattleData} from "../../src/lib/GameAPI";
+import {BattlePhase} from "../../src/lib/GameAPI";
 import {NODE_ORDER, UNIT_TYPES} from "../../src/AI/nn/GameIndex";
 import {keyOf, armyIdOf, attackReady, battleUnits, ArmyWalk} from "../../src/AI/nn/Armies";
 import {computeActionTypeMask, executeArmyAction, ACTION_EXIT, ACTION_MOVE} from "../../src/AI/nn/ActionSpace";

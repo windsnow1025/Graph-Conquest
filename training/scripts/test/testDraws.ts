@@ -17,7 +17,7 @@ import {randomTurn} from "../../src/Opponents";
 import type GameAPI from "../../../src/lib/GameAPI";
 import {armyIdOf} from "../../../src/AI/nn/Armies";
 import {MAX_TURNS, MODEL_DIR_PHASE1, countNodes, createRandomizedGame} from "../../src/trainUtils";
-import type {GameData} from "../../../src/lib/GameSystem";
+import type {GameData} from "../../../src/lib/GameAPI";
 import * as path from "path";
 
 const modelDir = process.argv[2] ? path.resolve(process.argv[2]) : MODEL_DIR_PHASE1;

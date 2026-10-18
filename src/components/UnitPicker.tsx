@@ -6,8 +6,7 @@ import Typography from "@mui/material/Typography";
 import FavoriteIcon from "@mui/icons-material/Favorite";
 import DirectionsRunIcon from "@mui/icons-material/DirectionsRun";
 import GpsFixedIcon from "@mui/icons-material/GpsFixed";
-import type {UnitData} from "../lib/Unit";
-import type {UnitSelection} from "../lib/GameAPI";
+import type {UnitSelection, UnitData} from "../lib/GameAPI";
 import {sameState} from "../AI/nn/UnitGroups";
 
 interface UnitPickerProps {

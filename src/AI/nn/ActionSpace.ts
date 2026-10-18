@@ -10,10 +10,8 @@
  * Which units realise a per-group count is fixed here: the healthiest first
  * for moving and committing to battle, the weakest first for disbanding.
  */
-import type {ArmyData} from "../../lib/Army";
+import type {ArmyId, ArmyData, UnitData} from "../../lib/GameAPI";
 import type GameAPI from "../../lib/GameAPI";
-import type {ArmyId} from "../../lib/GameAPI";
-import type {UnitData} from "../../lib/Unit";
 import {NODE_ORDER} from "./GameIndex";
 import {attackReady} from "./Armies";
 import {moveGroups, commitGroups, disbandGroups, takeByFractions, selectionsOf} from "./UnitGroups";

@@ -4,10 +4,7 @@
  * the identifier.
  */
 import type GameAPI from "../../lib/GameAPI";
-import type {ArmyId} from "../../lib/GameAPI";
-import type {GameData} from "../../lib/GameSystem";
-import type {ArmyData} from "../../lib/Army";
-import type {UnitData} from "../../lib/Unit";
+import type {ArmyId, GameData, ArmyData, UnitData} from "../../lib/GameAPI";
 
 /** The name of an army within its player: its node and unit type. */
 export function keyOf(army: {location: string; unitType: string}): string {

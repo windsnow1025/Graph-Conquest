@@ -14,8 +14,7 @@
  *   commit  (3): groups 0, 2, 4, the attack-ready units by remaining moves
  *   disband (6): all groups
  */
-import type {UnitData} from "../../lib/Unit";
-import type {UnitSelection} from "../../lib/GameAPI";
+import type {UnitSelection, UnitData} from "../../lib/GameAPI";
 
 const MAX_MOVES = 2; // unit speed in this game is at most 2
 export const NUM_UNIT_GROUPS = (MAX_MOVES + 1) * 2;

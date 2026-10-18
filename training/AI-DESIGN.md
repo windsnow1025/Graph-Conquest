@@ -247,12 +247,18 @@ already processed in the phase do not act again until the next army phase.
 ## Scoring Function
 
 ```
-scorePlayer(game, playerIdx):
-  nodeIncome = sum of income from owned nodes
-  interest = floor(money × interestRate)
-  upkeep = game.getUpkeep(player)
+scorePlayer(api, constants, playerIdx):
+  player = constants.names[playerIdx]
+  nodeIncome = api.getNodeIncome(player)
+  interest = floor(api.getMoney(player) × constants.interestRate)
+  upkeep = api.getUpkeep(player)
   return nodeIncome + interest + upkeep
 ```
+
+`api` is the `GameAPI` the labeler plays through, as every consumer of the core
+does (`src/lib/GameAPI.ts`: identifiers in, data out, no live core object
+crossing); `constants` carries the players' names, the interest rate and the
+unit stats, read from the state once per turn.
 
 - Interest: rewards positive cash flow, punishes bankruptcy
 - Upkeep: rewards maintaining military strength, encourages aggression
@@ -291,7 +297,7 @@ commitment labels:
 
 **DAgger mode**: NN plays the game (encounters its own states), greedy provides labels at each decision point. Addresses distribution shift between greedy's states and NN's states. `generateData.ts imitation --dagger-model <name>` plays the DAgger games with a trained model (a fresh random-weight model without it). A second imitation round on 50 such games plus 70 greedy games did not help in this design: the model trained on it scored 16W 0L 11D over 27 games vs Random against 21W 0L 6D for the model trained on the 100-game greedy dataset alone, so phase 1 uses the default dataset.
 
-**Config variance** (±25%, all phases + tests): unit stats (attack, defend, health, cost), node income, interest rate, upkeep rate, player starting money. Range and speed not randomized. Each game gets an independent copy of the map data. Shared via `createRandomizedGame()` in trainUtils.
+**Config variance** (±25%, all phases + tests): unit stats (attack, defend, health, cost), node income, interest rate, upkeep rate, player starting money. Range and speed not randomized. Each game gets an independent copy of the map data. Shared via `createRandomizedGame()` in trainUtils, which returns the `GameAPI` of a new game.
 
 **Position rotation**: greedy/NN plays as Blue(0), Red(1), Green(2), rotating across games (g%3).
 

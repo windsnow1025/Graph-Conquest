@@ -3,10 +3,8 @@
  */
 import {NNModel} from "../../src/AI/nn/NNModel";
 import {nodeFileSystem} from "./nodeIO";
-import type {GameData} from "../../src/lib/GameSystem";
-import type {PlayerData} from "../../src/lib/Player";
+import type {GameData, PlayerData, GameConfig} from "../../src/lib/GameAPI";
 import DefaultConfig from "../../src/lib/data/DefaultConfig";
-import type {GameConfig} from "../../src/lib/Config";
 import {UNIT_TYPES} from "../../src/AI/nn/GameIndex";
 import {executeNNTurn} from "../../src/AI/TurnExecutor";
 import {randomTurn} from "./Opponents";

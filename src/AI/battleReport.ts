@@ -2,8 +2,7 @@
  * Battle diagnostics for the stuck-loop guards in the decision loops.
  * Reads the battle's data.
  */
-import type {BattleData} from "../lib/Battle";
-import type {ArmyData} from "../lib/Army";
+import type {BattleData, ArmyData} from "../lib/GameAPI";
 import {battleUnits} from "./nn/Armies";
 
 export function battleStuckReport(context: string, battle: BattleData): string {

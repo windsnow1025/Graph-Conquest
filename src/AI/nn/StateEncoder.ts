@@ -22,9 +22,7 @@
  *
  * Total: 5 + 18 + 21 + 1024 + 292 = 1360 features.
  */
-import type {GameData} from "../../lib/GameSystem";
-import type {ArmyData} from "../../lib/Army";
-import type {UnitData} from "../../lib/Unit";
+import type {GameData, ArmyData, UnitData} from "../../lib/GameAPI";
 import type GameAPI from "../../lib/GameAPI";
 import type {DefaultUnitName} from "../../lib/data/DefaultUnitStatsMap.ts";
 import {NODE_ORDER, NUM_NODES, UNIT_TYPES, NUM_UNIT_TYPES} from "./GameIndex";

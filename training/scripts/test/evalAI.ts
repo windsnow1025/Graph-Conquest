@@ -14,7 +14,7 @@
  *   npx tsx training/scripts/test/evalAI.ts --compare public/model-old-v2-backup  # Compare two models
  */
 import {setupBackend} from "../../src/setupBackend";
-import type {GameData} from "../../../src/lib/GameSystem";
+import type {GameData} from "../../../src/lib/GameAPI";
 import DefaultConfig from "../../../src/lib/data/DefaultConfig";
 import {executeNNTurn} from "../../../src/AI/TurnExecutor";
 import {NNModel} from "../../../src/AI/nn/NNModel";

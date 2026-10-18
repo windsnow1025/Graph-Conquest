@@ -16,12 +16,8 @@
  * Pass samples array to greedyTurn to record decisions for imitation learning.
  */
 import type GameAPI from "../../src/lib/GameAPI";
-import type {ArmyId, ArmySelection, AttackAllocation} from "../../src/lib/GameAPI";
-import type {GameData} from "../../src/lib/GameSystem";
-import type {ArmyData} from "../../src/lib/Army";
-import type {UnitData, UnitStatsMap} from "../../src/lib/Unit";
-import type {BattleData} from "../../src/lib/Battle";
-import {BattlePhase} from "../../src/lib/Battle";
+import type {ArmyId, ArmySelection, AttackAllocation, GameData, ArmyData, UnitData, UnitStatsMap, BattleData} from "../../src/lib/GameAPI";
+import {BattlePhase} from "../../src/lib/GameAPI";
 import {NODE_ORDER, NUM_NODES, UNIT_TYPES} from "../../src/AI/nn/GameIndex";
 import {keyOf, armyIdOf, attackReady, battleUnits, ArmyWalk} from "../../src/AI/nn/Armies";
 import {encodeState, perTypeState} from "../../src/AI/nn/StateEncoder";

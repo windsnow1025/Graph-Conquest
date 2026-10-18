@@ -1,5 +1,5 @@
 import type GameAPI from "../lib/GameAPI";
-import type {BattleData} from "../lib/Battle";
+import type {BattleData} from "../lib/GameAPI";
 import {executeNNTurnSteps, executeNNDefenderPhase} from "./TurnExecutor";
 import {NNModel} from "./nn/NNModel";
 import {WEB_MODEL_FILE, webModelHandler} from "./nn/WebModel";
