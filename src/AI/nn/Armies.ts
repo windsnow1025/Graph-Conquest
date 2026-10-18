@@ -18,6 +18,11 @@ export function armyIdOf(owner: string, army: ArmyData): ArmyId {
   return {owner, location: army.location, unitType: army.unitType};
 }
 
+/** The name of an army in the game: its owner, node and unit type. */
+export function keyOfId(id: ArmyId): string {
+  return `${id.owner}|${id.location}|${id.unitType}`;
+}
+
 /** The units of an army that can still attack this turn. */
 export function attackReady(army: ArmyData): UnitData[] {
   return army.units.filter(unit => unit.canAttack);

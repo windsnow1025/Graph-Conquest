@@ -1,31 +1,35 @@
 import {useEffect, useRef, useState} from "react";
 import {Application, Graphics, Text, Container, TextStyle, FederatedPointerEvent, Ticker, Rectangle} from "pixi.js";
-import GameSystem from "../lib/GameSystem";
-import Player from "../lib/Player";
-import Army from "../lib/Army";
+import type GameAPI from "../lib/GameAPI";
+import type {ArmyId} from "../lib/GameAPI";
+import type {GameData} from "../lib/GameSystem";
+import type {PlayerData} from "../lib/Player";
+import type {ArmyData} from "../lib/Army";
+import {armyIdOf, keyOfId, attackReady, battleUnits} from "../AI/nn/Armies";
 import mapLayout, {type NodeType} from "../data/MapLayout";
 import {playerColors} from "../data/PlayerColors";
 
 interface BattleAllocationDisplay {
-  attacker: Army;
-  target: Army;
+  attacker: ArmyId;
+  target: ArmyId;
   unitCount: number;
 }
 
 interface GameCanvasProps {
-  game: GameSystem;
+  api: GameAPI;
+  state: GameData;
   version: number;
-  selectedArmy: Army | null;
+  selectedArmy: ArmyId | null;
   selectedNode: string | null;
   moveDestinations: Set<string>;
-  highlightPulse: Set<Army>;
-  highlightSolid: Set<Army>;
-  targetPulse: Set<Army>;
+  highlightPulse: Set<string>;
+  highlightSolid: Set<string>;
+  targetPulse: Set<string>;
   attackableLocations: Set<string>;
   battleAllocationDisplay: BattleAllocationDisplay[];
   battleRemaining: number;
   onNodeClick: (location: string) => void;
-  onArmyClick: (army: Army, player: Player) => void;
+  onArmyClick: (id: ArmyId) => void;
   onClearSelection: () => void;
 }
 
@@ -33,7 +37,7 @@ const Army_Radius = 14;
 export const Base_Width = 800;
 export const Base_Height = 720;
 
-function GameCanvas({game, version, selectedArmy, selectedNode, moveDestinations, highlightPulse, highlightSolid, targetPulse, attackableLocations, battleAllocationDisplay, battleRemaining, onNodeClick, onArmyClick, onClearSelection}: GameCanvasProps) {
+function GameCanvas({api, state, version, selectedArmy, selectedNode, moveDestinations, highlightPulse, highlightSolid, targetPulse, attackableLocations, battleAllocationDisplay, battleRemaining, onNodeClick, onArmyClick, onClearSelection}: GameCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const [ready, setReady] = useState(false);
@@ -112,8 +116,8 @@ function GameCanvas({game, version, selectedArmy, selectedNode, moveDestinations
     app.stage.addChild(bgHit);
 
     drawEdges(app);
-    const nodePulse = drawNodes(app, game, selectedNode, moveDestinations, attackableLocations, onNodeClick);
-    const { pulseGraphics: armyPulse, armyPositions } = drawArmies(app, game, selectedArmy, highlightPulse, highlightSolid, targetPulse, onArmyClick);
+    const nodePulse = drawNodes(app, state, selectedNode, moveDestinations, attackableLocations, onNodeClick);
+    const { pulseGraphics: armyPulse, armyPositions } = drawArmies(app, api, state, selectedArmy, highlightPulse, highlightSolid, targetPulse, onArmyClick);
     if (battleAllocationDisplay.length > 0 || battleRemaining > 0) {
       drawBattleArrows(app, armyPositions, battleAllocationDisplay, battleRemaining, selectedArmy);
     }
@@ -137,7 +141,7 @@ function GameCanvas({game, version, selectedArmy, selectedNode, moveDestinations
         app.ticker.remove(tickerFn);
       }
     };
-  }, [ready, version, resizeCount, selectedArmy, selectedNode, moveDestinations, highlightPulse, highlightSolid, targetPulse, attackableLocations, battleAllocationDisplay, battleRemaining, game, onNodeClick, onArmyClick, onClearSelection]);
+  }, [ready, version, resizeCount, selectedArmy, selectedNode, moveDestinations, highlightPulse, highlightSolid, targetPulse, attackableLocations, battleAllocationDisplay, battleRemaining, api, state, onNodeClick, onArmyClick, onClearSelection]);
 
   return <div ref={containerRef} style={{width: "100%", height: "100%", overflow: "hidden"}}/>;
 }
@@ -227,7 +231,7 @@ function drawNodeShape(g: Graphics, type: NodeType, radius: number) {
 
 function drawNodes(
   app: Application,
-  game: GameSystem,
+  state: GameData,
   selectedNode: string | null,
   moveDestinations: Set<string>,
   attackableLocations: Set<string>,
@@ -249,7 +253,7 @@ function drawNodes(
     let fillColor = style.defaultFill;
     let strokeColor = style.defaultStroke;
 
-    const owner = game.nodeOwnership.get(name);
+    const owner = state.nodeOwnership.get(name);
     if (owner) {
       const ownerColor = playerColors[owner.name];
       if (ownerColor !== undefined) {
@@ -304,18 +308,20 @@ function drawNodes(
 
 function drawArmies(
   app: Application,
-  game: GameSystem,
-  selectedArmy: Army | null,
-  highlightPulse: Set<Army>,
-  highlightSolid: Set<Army>,
-  targetPulse: Set<Army>,
-  onArmyClick: (army: Army, player: Player) => void,
-): { pulseGraphics: Graphics[]; armyPositions: Map<Army, {x: number, y: number}> } {
+  api: GameAPI,
+  state: GameData,
+  selectedArmy: ArmyId | null,
+  highlightPulse: Set<string>,
+  highlightSolid: Set<string>,
+  targetPulse: Set<string>,
+  onArmyClick: (id: ArmyId) => void,
+): { pulseGraphics: Graphics[]; armyPositions: Map<string, {x: number, y: number}> } {
   const pulseGraphics: Graphics[] = [];
-  const armyPositions = new Map<Army, {x: number, y: number}>();
+  const armyPositions = new Map<string, {x: number, y: number}>();
+  const selectedKey = selectedArmy ? keyOfId(selectedArmy) : null;
 
-  const armiesByLocation = new Map<string, Array<{ army: Army; player: Player }>>();
-  for (const player of game.allPlayers) {
+  const armiesByLocation = new Map<string, Array<{ army: ArmyData; player: PlayerData }>>();
+  for (const player of [...state.players, state.neutralPlayer]) {
     for (const army of player.armies) {
       if (army.units.length === 0) continue;
       if (!armiesByLocation.has(army.location)) {
@@ -325,7 +331,7 @@ function drawArmies(
     }
   }
 
-  const isCurrentPlayer = (player: Player) => player === game.currentPlayer;
+  const currentPlayer = state.players[state.currentPlayerIndex];
 
   for (const [location, entries] of armiesByLocation) {
     const node = mapLayout[location];
@@ -334,11 +340,13 @@ function drawArmies(
 
     entries.forEach((entry, index) => {
       const {army, player} = entry;
+      const id = armyIdOf(player.name, army);
+      const key = keyOfId(id);
       const offsetX = (index - (entries.length - 1) / 2) * (Army_Radius * 2.5);
 
       const armyX = node.x + offsetX;
       const armyY = node.y - nodeRadius - Army_Radius - 4;
-      armyPositions.set(army, {x: armyX, y: armyY});
+      armyPositions.set(key, {x: armyX, y: armyY});
 
       const armyContainer = new Container();
       armyContainer.position.set(armyX, armyY);
@@ -346,24 +354,24 @@ function drawArmies(
       armyContainer.cursor = "pointer";
       armyContainer.on("pointertap", (e: FederatedPointerEvent) => {
         e.stopPropagation();
-        onArmyClick(army, player);
+        onArmyClick(id);
       });
 
       const color = playerColors[player.name] ?? 0x888888;
       const canMove = army.units.some((unit) => unit.remainingMoves > 0);
-      const canAtk = army.attackCandidates.length > 0;
-      const isCurrent = isCurrentPlayer(player);
-      const exhausted = isCurrent && !canMove && !canAtk && !game.currentBattle;
+      const canAtk = attackReady(army).length > 0;
+      const isCurrent = player === currentPlayer;
+      const exhausted = isCurrent && !canMove && !canAtk && !state.currentBattle;
 
       // Green solid ring — selected for battle
-      if (highlightSolid.has(army)) {
+      if (highlightSolid.has(key)) {
         const ring = new Graphics();
         ring.circle(0, 0, Army_Radius + 2);
-        ring.stroke({width: 3, color: game.currentBattle ? 0xFF5252 : 0x4CAF50});
+        ring.stroke({width: 3, color: state.currentBattle ? 0xFF5252 : 0x4CAF50});
         armyContainer.addChild(ring);
       }
       // Green pulsing ring — available/unacted
-      else if (highlightPulse.has(army)) {
+      else if (highlightPulse.has(key)) {
         const ring = new Graphics();
         ring.circle(0, 0, Army_Radius + 2);
         ring.stroke({width: 2, color: 0x4CAF50});
@@ -372,7 +380,7 @@ function drawArmies(
       }
 
       // Red pulsing ring — targetable enemy
-      if (targetPulse.has(army)) {
+      if (targetPulse.has(key)) {
         const ring = new Graphics();
         ring.circle(0, 0, Army_Radius + 2);
         ring.stroke({width: 2.5, color: 0xFF5252});
@@ -381,7 +389,7 @@ function drawArmies(
       }
 
       // Selection highlight ring
-      if (army === selectedArmy) {
+      if (key === selectedKey) {
         const ring = new Graphics();
         ring.circle(0, 0, Army_Radius + 3);
         ring.stroke({width: 2, color: 0xFFD740});
@@ -400,16 +408,16 @@ function drawArmies(
       }
 
       // Status indicators (only outside battle)
-      if (isCurrent && !exhausted && !game.currentBattle) {
+      if (isCurrent && !exhausted && !state.currentBattle) {
         const indicators = new Graphics();
         if (canMove) {
-          const hasMoveDest = army.getMovableLocations(game.gameMap, game.enemyLocations).length > 0;
+          const hasMoveDest = api.getMovableLocations(id).length > 0;
           indicators.circle(-Army_Radius + 3, Army_Radius - 3, 3);
           indicators.fill(hasMoveDest ? 0x4CAF50 : 0x2E7D32);
           indicators.alpha = hasMoveDest ? 1 : 0.4;
         }
         if (canAtk) {
-          const hasTarget = game.hasAttackTargets(army);
+          const hasTarget = api.hasAttackTargets(id);
           indicators.circle(Army_Radius - 3, Army_Radius - 3, 3);
           indicators.fill(hasTarget ? 0xFF5252 : 0xB71C1C);
           indicators.alpha = hasTarget ? 1 : 0.4;
@@ -418,9 +426,9 @@ function drawArmies(
       }
 
       // Unit count, with the battle contingent when only part of the army is fighting
-      const battleUnits = army.battleUnits.length;
+      const inBattle = battleUnits(army).length;
       const countLabel = new Text({
-        text: battleUnits > 0 && battleUnits < army.units.length ? `${battleUnits}/${army.units.length}` : `${army.units.length}`,
+        text: inBattle > 0 && inBattle < army.units.length ? `${inBattle}/${army.units.length}` : `${army.units.length}`,
         style: new TextStyle({
           fontSize: 11,
           fill: 0xffffff,
@@ -452,14 +460,14 @@ function drawArmies(
 
 function drawBattleArrows(
   app: Application,
-  armyPositions: Map<Army, {x: number, y: number}>,
+  armyPositions: Map<string, {x: number, y: number}>,
   allocations: BattleAllocationDisplay[],
   remaining: number,
-  attackerArmy: Army | null,
+  attackerArmy: ArmyId | null,
 ) {
   for (const alloc of allocations) {
-    const from = armyPositions.get(alloc.attacker);
-    const to = armyPositions.get(alloc.target);
+    const from = armyPositions.get(keyOfId(alloc.attacker));
+    const to = armyPositions.get(keyOfId(alloc.target));
     if (!from || !to) continue;
 
     const dx = to.x - from.x;
@@ -514,7 +522,7 @@ function drawBattleArrows(
 
   // Show remaining count near attacker army
   if (attackerArmy && remaining > 0) {
-    const pos = armyPositions.get(attackerArmy);
+    const pos = armyPositions.get(keyOfId(attackerArmy));
     if (pos) {
       const label = new Text({
         text: `${remaining} left`,

@@ -1,4 +1,4 @@
-import {useState, useRef, useCallback, useEffect} from "react";
+import {useState, useRef, useCallback, useEffect, useMemo} from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Slider from "@mui/material/Slider";
@@ -8,14 +8,16 @@ import TextField from "@mui/material/TextField";
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
 import Chip from "@mui/material/Chip";
-import GameSystem, {type GameSave} from "./lib/GameSystem";
+import GameAPI from "./lib/GameAPI";
+import type {ArmyId, ArmySelection, AttackAllocation, UnitSelection} from "./lib/GameAPI";
+import type {GameData, GameSave} from "./lib/GameSystem";
+import type {ArmyData} from "./lib/Army";
 import DefaultConfig from "./lib/data/DefaultConfig";
-import Player from "./lib/Player";
-import Army from "./lib/Army";
-import type Unit from "./lib/Unit";
 import {BattlePhase} from "./lib/Battle";
 import type {DefaultUnitName} from "./lib/data/DefaultUnitStatsMap.ts";
 import DefaultUnitStatsMap from "./lib/data/DefaultUnitStatsMap.ts";
+import {armyIdOf, keyOfId, attackReady, battleUnits} from "./AI/nn/Armies";
+import {sameState, selectionsOf} from "./AI/nn/UnitGroups";
 import GameCanvas, {Base_Width, Base_Height} from "./components/GameCanvas";
 import ModeSelect from "./components/ModeSelect";
 import UnitPicker from "./components/UnitPicker";
@@ -30,14 +32,23 @@ const NO_PLAYERS = new Set<string>();
 
 const overlayPaper = {opacity: 0.9, pointerEvents: "auto" as const};
 
+/** The army a state holds under an identifier, or null when its units have all left. */
+function findArmy(state: GameData, id: ArmyId): ArmyData | null {
+  const player = [...state.players, state.neutralPlayer].find(p => p.name === id.owner);
+  return player?.armies.find(army => army.location === id.location && army.unitType === id.unitType) ?? null;
+}
+
+function countOf(selections: UnitSelection[]): number {
+  return selections.reduce((sum, selection) => sum + selection.count, 0);
+}
+
 function App() {
-  const gameRef = useRef(new GameSystem(DefaultConfig));
+  const apiRef = useRef(GameAPI.create(DefaultConfig));
   const [version, setVersion] = useState(0);
-  const [selectedArmy, setSelectedArmy] = useState<Army | null>(null);
-  const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
+  const [selectedArmy, setSelectedArmy] = useState<ArmyId | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [gameMode, setGameMode] = useState<GameMode>("menu");
-  const [gameEpoch, setGameEpoch] = useState(0); // bumped when gameRef is replaced, so game-bound effects restart
+  const [gameEpoch, setGameEpoch] = useState(0); // bumped when apiRef is replaced, so game-bound effects restart
   const [aiError, setAiError] = useState<string | null>(null); // an AI turn or defender phase that failed (the game cannot continue)
   const canvasContainerRef = useRef<HTMLDivElement>(null);
 
@@ -46,25 +57,29 @@ function App() {
   const [recruitCount, setRecruitCount] = useState(1);
 
   // Army management UI
-  const [selectedUnits, setSelectedUnits] = useState<Set<Unit>>(new Set());
+  const [selectedUnits, setSelectedUnits] = useState<UnitSelection[]>([]);
 
   // Pre-battle targeting
   const [battleTarget, setBattleTarget] = useState<string | null>(null);
-  const [battlePicked, setBattlePicked] = useState<Map<Army, Unit[]>>(new Map());
+  const [battlePicked, setBattlePicked] = useState<Map<string, ArmySelection>>(new Map());
 
   // In-battle attack allocation
-  const [battleAttackArmy, setBattleAttackArmy] = useState<Army | null>(null);
-  const [battleAllocations, setBattleAllocations] = useState<Map<Army, number>>(new Map());
-  const [battleAllocTarget, setBattleAllocTarget] = useState<Army | null>(null);
+  const [battleAttackArmy, setBattleAttackArmy] = useState<ArmyId | null>(null);
+  const [battleAllocations, setBattleAllocations] = useState<AttackAllocation[]>([]);
+  const [battleAllocTarget, setBattleAllocTarget] = useState<ArmyId | null>(null);
   const [battleAllocCount, setBattleAllocCount] = useState(1);
 
   // Save/Load
   const [saveLoadMode, setSaveLoadMode] = useState<"save" | "load" | null>(null);
   const [saveName, setSaveName] = useState("");
 
-  const game = gameRef.current;
-  const battle = game.currentBattle;
-  const currentPlayer = game.currentPlayer;
+  const api = apiRef.current;
+  // One state read per game change, so that the objects stay the same between changes, as the effects keyed on them expect
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const state = useMemo(() => api.getState(), [api, version]);
+  const battle = state.currentBattle;
+  const currentPlayer = state.players[state.currentPlayerIndex];
+  const gameOver = api.isGameOver();
 
   const update = useCallback(() => {
     setVersion(v => v + 1);
@@ -72,28 +87,27 @@ function App() {
 
   const clearSelection = useCallback(() => {
     setSelectedArmy(null);
-    setSelectedPlayer(null);
     setSelectedNode(null);
-    setSelectedUnits(new Set());
+    setSelectedUnits([]);
     setBattleTarget(null);
     setBattlePicked(new Map());
   }, []);
 
   const clearBattleAttack = useCallback(() => {
     setBattleAttackArmy(null);
-    setBattleAllocations(new Map());
+    setBattleAllocations([]);
     setBattleAllocTarget(null);
     setBattleAllocCount(1);
   }, []);
 
   const selectDefaultNode = useCallback(() => {
-    const g = gameRef.current;
-    const player = g.currentPlayer;
-    if (g.nodeOwnership.get(player.homeLocation) === player) {
+    const current = apiRef.current.getState();
+    const player = current.players[current.currentPlayerIndex];
+    if (current.nodeOwnership.get(player.homeLocation) === player) {
       setSelectedNode(player.homeLocation);
       return;
     }
-    const recruitLocs = g.recruitLocations;
+    const recruitLocs = apiRef.current.getRecruitLocations();
     if (recruitLocs.length === 1) {
       setSelectedNode(recruitLocs[0]);
     }
@@ -103,18 +117,22 @@ function App() {
   const aiPlayers = gameMode === "autoplay" ? ALL_PLAYERS
     : gameMode === "ai" || gameMode === "greedy" ? VS_AI_PLAYERS
     : NO_PLAYERS;
-  const isAITurn = (gameMode === "ai" || gameMode === "greedy" || gameMode === "autoplay") && !game.gameOver && aiPlayers.has(currentPlayer.name);
+  const isAITurn = (gameMode === "ai" || gameMode === "greedy" || gameMode === "autoplay") && !gameOver && aiPlayers.has(currentPlayer.name);
 
   useEffect(() => {
     if (!isAITurn) return;
     let cancelled = false;
     const runAllAITurns = async () => {
-      const g = gameRef.current;
+      const a = apiRef.current;
       const aiSet = gameMode === "autoplay" ? ALL_PLAYERS : VS_AI_PLAYERS;
-      while (!cancelled && !g.gameOver && aiSet.has(g.currentPlayer.name)) {
+      const currentName = () => {
+        const current = a.getState();
+        return current.players[current.currentPlayerIndex].name;
+      };
+      while (!cancelled && !a.isGameOver() && aiSet.has(currentName())) {
         const gen = gameMode === "greedy"
-          ? greedyTurnStepsUI(g)
-          : await aiTurnSteps(g);
+          ? greedyTurnStepsUI(a)
+          : await aiTurnSteps(a);
         if (cancelled) return;
         if (!gen) { update(); continue; }
         // A step runs in a timer callback: a throw there (an AI decision, the game engine)
@@ -146,7 +164,7 @@ function App() {
 
     // AI-controlled defender uses their model (NN or greedy)
     if (battle.phase === BattlePhase.DefenderTurn && aiPlayers.has(battle.defenderPlayer.name)) {
-      aiDefenderPhase(gameRef.current, battle, gameMode).then(update, (e: unknown) => setAiError(e instanceof Error ? e.message : String(e)));
+      aiDefenderPhase(apiRef.current, battle, gameMode).then(update, (e: unknown) => setAiError(e instanceof Error ? e.message : String(e)));
       return;
     }
 
@@ -154,10 +172,10 @@ function App() {
     // The attacker is never auto-played: acting would foreclose the retreat decision.
     if (battle.phase === BattlePhase.DefenderTurn
       && battle.attackerArmies.length === 1 && battle.defenderArmies.length === 1) {
-      const army = battle.defenderArmies[0];
-      const target = battle.attackerArmies[0];
-      if (battle.canAct(army)) {
-        gameRef.current.allocateAttack(army, new Map([[target, army.battleUnits.length]]));
+      const army = armyIdOf(battle.defenderPlayer.name, battle.defenderArmies[0]);
+      const target = armyIdOf(battle.attackerPlayer.name, battle.attackerArmies[0]);
+      if (apiRef.current.canAct(army)) {
+        apiRef.current.allocateAttack(army, [{target, count: battleUnits(battle.defenderArmies[0]).length}]);
         clearBattleAttack();
         update();
         return;
@@ -172,7 +190,7 @@ function App() {
 
   // --- Handlers ---
   const handleModeSelect = useCallback((mode: GameMode) => {
-    gameRef.current = new GameSystem(DefaultConfig);
+    apiRef.current = GameAPI.create(DefaultConfig);
     setVersion(0);
     clearSelection();
     clearBattleAttack();
@@ -191,7 +209,7 @@ function App() {
 
   const handleSave = (name: string) => {
     if (!name.trim()) return;
-    const save = gameRef.current.toJSON();
+    const save = apiRef.current.toJSON();
     localStorage.setItem(SAVE_PREFIX + name.trim(), JSON.stringify(save));
     setSaveLoadMode(null);
     setSaveName("");
@@ -201,7 +219,7 @@ function App() {
     const raw = localStorage.getItem(SAVE_PREFIX + name);
     if (!raw) return;
     const save: GameSave = JSON.parse(raw);
-    gameRef.current = GameSystem.fromJSON(save);
+    apiRef.current = GameAPI.fromJSON(save);
     setGameEpoch(e => e + 1);
     clearSelection();
     clearBattleAttack();
@@ -216,7 +234,7 @@ function App() {
   };
 
   const handleEndTurn = useCallback(() => {
-    gameRef.current.endTurn();
+    apiRef.current.endTurn();
     clearSelection();
     selectDefaultNode();
     update();
@@ -246,22 +264,29 @@ function App() {
   };
 
   // --- Computed highlights ---
-  const armiesInRange = battleTarget
-    ? new Set(gameRef.current.getArmiesInRange(battleTarget))
-    : new Set<Army>();
+  const armiesInRange = new Set(battleTarget ? api.getArmiesInRange(battleTarget).map(keyOfId) : []);
 
-  const battleUnacted = battle ? new Set(battle.unactedArmies) : new Set<Army>();
-  const allocatedTargets = new Set(battleAllocations.keys());
-  const battleTargets = battle && battleAttackArmy && !battleAllocTarget
-    ? new Set(battle.getTargetsInRange(battleAttackArmy).filter(a => !allocatedTargets.has(a)))
-    : new Set<Army>();
+  const battleUnacted = new Set<string>();
+  if (battle) {
+    const attacking = battle.phase === BattlePhase.AttackerTurn;
+    const owner = (attacking ? battle.attackerPlayer : battle.defenderPlayer).name;
+    for (const army of attacking ? battle.attackerArmies : battle.defenderArmies) {
+      if (!battle.actedArmies.has(army)) battleUnacted.add(keyOfId(armyIdOf(owner, army)));
+    }
+  }
+  // The army the player is allocating attacks from, while it can still act
+  const attackingArmy = battle && battleAttackArmy && api.canAct(battleAttackArmy) ? battleAttackArmy : null;
+  const allocatedTargets = new Set(battleAllocations.map(allocation => keyOfId(allocation.target)));
+  const battleTargets = attackingArmy && !battleAllocTarget
+    ? new Set(api.getTargetsInRange(attackingArmy).map(keyOfId).filter(key => !allocatedTargets.has(key)))
+    : new Set<string>();
 
-  const battleRemaining = battleAttackArmy
-    ? battleAttackArmy.battleUnits.length - [...battleAllocations.values()].reduce((sum, count) => sum + count, 0)
+  const battleRemaining = attackingArmy
+    ? battleUnits(findArmy(state, attackingArmy)!).length - battleAllocations.reduce((sum, allocation) => sum + allocation.count, 0)
     : 0;
 
   // --- Click handlers ---
-  const attackableLocations = !battle && !battleTarget && !selectedArmy && !isAITurn ? game.attackableLocations : new Set<string>();
+  const attackableLocations = !battle && !battleTarget && !selectedArmy && !isAITurn ? api.getAttackableLocations() : new Set<string>();
 
   const handleNodeClick = useCallback((location: string) => {
     if (battle || isAITurn) return;
@@ -274,17 +299,16 @@ function App() {
     }
 
     // Move selected army to clicked node
-    if (selectedArmy && selectedPlayer === gameRef.current.currentPlayer) {
-      gameRef.current.movePlayerUnits([...selectedUnits], location);
+    if (selectedArmy && selectedArmy.owner === currentPlayer.name) {
+      apiRef.current.moveUnits(selectedArmy, selectedUnits, location);
       clearSelection();
       update();
       return;
     }
 
     // Click attackable enemy node → enter battle targeting
-    if (attackableLocations.has(location)) {
+    if (!selectedArmy && apiRef.current.getAttackableLocations().has(location)) {
       setSelectedArmy(null);
-      setSelectedPlayer(null);
       setSelectedNode(null);
       setBattleTarget(location);
       setBattlePicked(new Map());
@@ -293,28 +317,28 @@ function App() {
 
     // Select node (for recruit UI etc.)
     setSelectedArmy(null);
-    setSelectedPlayer(null);
     setSelectedNode(location);
-  }, [battle, isAITurn, selectedArmy, selectedPlayer, selectedUnits, battleTarget, attackableLocations, update, clearSelection]);
+  }, [battle, isAITurn, selectedArmy, currentPlayer, selectedUnits, battleTarget, update, clearSelection]);
 
-  const handleArmyClick = useCallback((army: Army, player: Player) => {
+  const handleArmyClick = useCallback((id: ArmyId) => {
     if (isAITurn) return;
-    const g = gameRef.current;
+    const a = apiRef.current;
+    const current = a.getState();
+    const key = keyOfId(id);
 
-    if (g.currentBattle) {
-      const b = g.currentBattle;
-      if (b.currentArmies.includes(army) && b.canAct(army)) {
-        setBattleAttackArmy(army);
-        setBattleAllocations(new Map());
+    if (current.currentBattle) {
+      if (a.canAct(id)) {
+        setBattleAttackArmy(id);
+        setBattleAllocations([]);
         setBattleAllocTarget(null);
         setBattleAllocCount(1);
         return;
       }
-      if (battleAttackArmy && battleRemaining > 0) {
-        const targets = b.getTargetsInRange(battleAttackArmy);
-        if (targets.includes(army) && !battleAllocations.has(army)) {
-          const needed = b.getUnitsNeeded(battleAttackArmy, army);
-          setBattleAllocTarget(army);
+      if (attackingArmy && battleRemaining > 0) {
+        const targets = a.getTargetsInRange(attackingArmy);
+        if (targets.some(target => keyOfId(target) === key) && !battleAllocations.some(allocation => keyOfId(allocation.target) === key)) {
+          const needed = a.getUnitsNeeded(attackingArmy, id);
+          setBattleAllocTarget(id);
           setBattleAllocCount(Math.min(needed, battleRemaining));
           return;
         }
@@ -322,25 +346,26 @@ function App() {
       return;
     }
 
-    const current = g.currentPlayer;
-    if (battleTarget && player === current) {
-      if (!armiesInRange.has(army)) return;
+    const army = findArmy(current, id);
+    if (!army) return;
+    const own = id.owner === current.players[current.currentPlayerIndex].name;
+    if (battleTarget && own) {
+      if (!a.getArmiesInRange(battleTarget).some(inRange => keyOfId(inRange) === key)) return;
       setBattlePicked((prev) => {
         const next = new Map(prev);
-        if (next.has(army)) next.delete(army);
-        else next.set(army, army.attackCandidates);
+        if (next.has(key)) next.delete(key);
+        else next.set(key, {army: id, selections: selectionsOf(attackReady(army))});
         return next;
       });
       return;
     }
 
     // Click enemy army → treat as clicking the node (enter targeting if attackable)
-    if (player !== current) {
-      if (attackableLocations.has(army.location)) {
+    if (!own) {
+      if (!battleTarget && !selectedArmy && a.getAttackableLocations().has(id.location)) {
         setSelectedArmy(null);
-        setSelectedPlayer(null);
         setSelectedNode(null);
-        setBattleTarget(army.location);
+        setBattleTarget(id.location);
         setBattlePicked(new Map());
       }
       return;
@@ -349,25 +374,25 @@ function App() {
     // Click own army → select it
     setBattleTarget(null);
     setBattlePicked(new Map());
-    setSelectedArmy(army);
-    setSelectedPlayer(player);
-    setSelectedUnits(new Set(army.units));
+    setSelectedArmy(id);
+    setSelectedUnits(selectionsOf(army.units));
     setSelectedNode(null);
-  }, [battle, isAITurn, battleTarget, battleAttackArmy, battleRemaining, armiesInRange, attackableLocations]);
+  }, [isAITurn, battleTarget, selectedArmy, attackingArmy, battleRemaining, battleAllocations]);
 
   // --- Army actions ---
   const handleDisband = useCallback(() => {
     if (!selectedArmy) return;
-    gameRef.current.disbandPlayerUnits([...selectedUnits]);
-    if (selectedArmy.units.length === 0) clearSelection();
-    else setSelectedUnits(new Set(selectedArmy.units));
+    apiRef.current.disbandUnits(selectedArmy, selectedUnits);
+    const army = findArmy(apiRef.current.getState(), selectedArmy);
+    if (!army) clearSelection();
+    else setSelectedUnits(selectionsOf(army.units));
     update();
   }, [selectedArmy, selectedUnits, update, clearSelection]);
 
   // --- Battle actions ---
   const handleStartBattle = useCallback(() => {
     if (!battleTarget || battlePicked.size === 0) return;
-    gameRef.current.startBattle([...battlePicked.values()].flat(), battleTarget);
+    apiRef.current.startBattle([...battlePicked.values()], battleTarget);
     clearSelection();
     clearBattleAttack();
     update();
@@ -375,14 +400,14 @@ function App() {
 
   const handleBattleAllocate = useCallback(() => {
     if (!battleAllocTarget) return;
-    setBattleAllocations(prev => new Map(prev).set(battleAllocTarget, battleAllocCount));
+    setBattleAllocations(prev => [...prev, {target: battleAllocTarget, count: battleAllocCount}]);
     setBattleAllocTarget(null);
     setBattleAllocCount(1);
   }, [battleAllocTarget, battleAllocCount]);
 
   const handleBattleConfirm = useCallback(() => {
     if (!battleAttackArmy || !battle) return;
-    gameRef.current.allocateAttack(battleAttackArmy, battleAllocations);
+    apiRef.current.allocateAttack(battleAttackArmy, battleAllocations);
     clearBattleAttack();
     update();
   }, [battle, battleAttackArmy, battleAllocations, update, clearBattleAttack]);
@@ -390,7 +415,7 @@ function App() {
 
   const handleBattleRetreat = useCallback(() => {
     if (!battle) return;
-    gameRef.current.retreat();
+    apiRef.current.retreat();
     clearBattleAttack();
     update();
   }, [battle, update, clearBattleAttack]);
@@ -399,10 +424,10 @@ function App() {
   const handleBattleAttackAll = useCallback(() => {
     if (!battle) return;
     if (battle.attackerArmies.length !== 1 || battle.defenderArmies.length !== 1) return;
-    const army = battle.attackerArmies[0];
-    const target = battle.defenderArmies[0];
-    if (battle.canAct(army)) {
-      gameRef.current.allocateAttack(army, new Map([[target, army.battleUnits.length]]));
+    const army = armyIdOf(battle.attackerPlayer.name, battle.attackerArmies[0]);
+    const target = armyIdOf(battle.defenderPlayer.name, battle.defenderArmies[0]);
+    if (apiRef.current.canAct(army)) {
+      apiRef.current.allocateAttack(army, [{target, count: battleUnits(battle.attackerArmies[0]).length}]);
     }
     clearBattleAttack();
     update();
@@ -417,43 +442,47 @@ function App() {
   const canvasSelectedArmy = battle ? battleAttackArmy : selectedArmy;
 
   const canvasHighlightPulse = battle
-    ? (battleAttackArmy ? new Set<Army>() : battleUnacted)
-    : battleTarget ? armiesInRange : new Set<Army>();
+    ? (battleAttackArmy ? new Set<string>() : battleUnacted)
+    : battleTarget ? armiesInRange : new Set<string>();
   const canvasHighlightSolid = battle
     ? new Set([
-        ...battleAllocations.keys(),
-        ...(battleAllocTarget ? [battleAllocTarget] : []),
+        ...allocatedTargets,
+        ...(battleAllocTarget ? [keyOfId(battleAllocTarget)] : []),
       ])
     : new Set(battlePicked.keys());
 
   // Recruit conditions
   const canRecruitAtSelected = !battle && !isAITurn && selectedNode !== null
-    && game.recruitLocations.includes(selectedNode);
-  const maxRecruit = Math.max(1, Math.floor(currentPlayer.money / game.unitStatsMap[unitType].cost) || 1);
+    && api.getRecruitLocations().includes(selectedNode);
+  const maxRecruit = Math.max(1, Math.floor(currentPlayer.money / state.unitStatsMap[unitType].cost) || 1);
   const recruitCountClamped = Math.min(recruitCount, maxRecruit);
 
   // Own army selected (not in battle)
-  const ownArmySelected = !battle && !isAITurn && selectedArmy && selectedPlayer === currentPlayer;
-  // Nodes every selected unit can reach
-  const moveDestinations = ownArmySelected && selectedUnits.size > 0
-    ? new Set(selectedArmy.getMovableLocations(game.gameMap, game.enemyLocations).filter((location) => {
-        const candidates = new Set(selectedArmy.getMoveCandidates(location, game.gameMap, game.enemyLocations));
-        return [...selectedUnits].every((unit) => candidates.has(unit));
+  const ownArmy = !battle && !isAITurn && selectedArmy && selectedArmy.owner === currentPlayer.name ? findArmy(state, selectedArmy) : null;
+  const selectedCount = countOf(selectedUnits);
+  // Nodes every selected unit can reach: the units of one state share their remaining moves
+  const moveDestinations = ownArmy && selectedArmy && selectedCount > 0
+    ? new Set(api.getMovableLocations(selectedArmy).filter((location) => {
+        const candidates = api.getMoveCandidates(selectedArmy, location);
+        return selectedUnits.every((selection) => candidates.some((unit) => sameState(unit, selection)));
       }))
     : new Set<string>();
-  const moveHint = selectedUnits.size === 0
+  const moveHint = selectedCount === 0
     ? {text: "Select units to move or disband", warning: false}
     : moveDestinations.size > 0
-      ? {text: `Click a highlighted node to move ${selectedUnits.size} ${selectedUnits.size === 1 ? "unit" : "units"}`, warning: false}
-      : [...selectedUnits].some((unit) => unit.remainingMoves === 0)
+      ? {text: `Click a highlighted node to move ${selectedCount} ${selectedCount === 1 ? "unit" : "units"}`, warning: false}
+      : selectedUnits.some((selection) => selection.remainingMoves === 0)
         ? {text: "Some selected units have no moves left", warning: true}
         : {text: "No node within reach of the selected units", warning: true};
+
+  const winner = api.getWinner();
 
   return (
     <Box className="local-scroll-root" sx={{flexDirection: "row"}}>
       <Box ref={canvasContainerRef} className="inflex-fill flex-center-nowrap" sx={{position: "relative"}}>
         <GameCanvas
-          game={game}
+          api={api}
+          state={state}
           version={version}
           selectedArmy={canvasSelectedArmy}
           selectedNode={selectedNode}
@@ -462,7 +491,7 @@ function App() {
           highlightSolid={canvasHighlightSolid}
           targetPulse={battleTargets}
           attackableLocations={attackableLocations}
-          battleAllocationDisplay={battleAttackArmy ? [...battleAllocations].map(([target, unitCount]) => ({attacker: battleAttackArmy, target, unitCount})) : []}
+          battleAllocationDisplay={battleAttackArmy ? battleAllocations.map(({target, count}) => ({attacker: battleAttackArmy, target, unitCount: count})) : []}
           battleRemaining={battleRemaining}
           onNodeClick={handleNodeClick}
           onArmyClick={handleArmyClick}
@@ -490,16 +519,13 @@ function App() {
         {/* ===== TOP RIGHT: All Players Stats ===== */}
         <Paper elevation={2} sx={{position: "absolute", top: 8, right: 8, p: 1, ...overlayPaper, width: 220}}>
           <Typography variant="caption" sx={{fontWeight: "bold", display: "block", mb: 0.5}}>
-            Turn {game.turnCount}
+            Turn {state.turnCount}
           </Typography>
-          {game.players.map(player => {
+          {state.players.map(player => {
             const color = playerCssColors[player.name] ?? "#888";
             const units = player.armies.reduce((sum, a) => sum + a.units.length, 0);
-            let income = 0;
-            for (const [node, owner] of game.nodeOwnership) {
-              if (owner === player) income += game.gameMap.getNodeData(node).income;
-            }
-            const upkeep = game.getUpkeep(player);
+            const income = api.getNodeIncome(player.name);
+            const upkeep = api.getUpkeep(player.name);
             const interest = Math.floor(player.money * DefaultConfig.interestRate);
             const net = income + interest - upkeep;
             const isCurrent = player === currentPlayer;
@@ -522,9 +548,9 @@ function App() {
               </Box>
             );
           })}
-          {game.gameOver && (
-            <Typography variant="body2" sx={{fontWeight: "bold", mt: 0.5, color: game.winner ? playerCssColors[game.winner.name] : undefined}}>
-              {game.winner ? `${game.winner.name} Wins!` : "Draw!"}
+          {gameOver && (
+            <Typography variant="body2" sx={{fontWeight: "bold", mt: 0.5, color: winner ? playerCssColors[winner] : undefined}}>
+              {winner ? `${winner} Wins!` : "Draw!"}
             </Typography>
           )}
         </Paper>
@@ -555,17 +581,21 @@ function App() {
         {battleTarget && !battle && (() => {
           const pos = getNodeScreenPos(battleTarget);
           if (!pos) return null;
-          const picked = [...battlePicked];
-          const total = picked.reduce((sum, [, units]) => sum + units.length, 0);
-          const ready = picked.length > 0 && picked.every(([, units]) => units.length > 0);
+          const picked = [...battlePicked.values()];
+          const total = picked.reduce((sum, {selections}) => sum + countOf(selections), 0);
+          const ready = picked.length > 0 && picked.every(({selections}) => countOf(selections) > 0);
           return (
             <Paper elevation={3} sx={{position: "absolute", left: pos.left, top: pos.top + 45 * pos.scale, transform: "translateX(-50%)", p: 1, ...overlayPaper, display: "flex", flexDirection: "column", gap: 1, width: 420}}>
-              {picked.map(([army, units]) => (
-                <Box key={`${army.location}|${army.unitType}`}>
-                  <Typography variant="caption" sx={{fontWeight: "bold"}}>{army.unitType} at {army.location}</Typography>
-                  <UnitPicker units={army.attackCandidates} selected={new Set(units)} onChange={(next) => setBattlePicked(prev => new Map(prev).set(army, [...next]))}/>
-                </Box>
-              ))}
+              {picked.map(({army: id, selections}) => {
+                const army = findArmy(state, id);
+                if (!army) return null;
+                return (
+                  <Box key={keyOfId(id)}>
+                    <Typography variant="caption" sx={{fontWeight: "bold"}}>{id.unitType} at {id.location}</Typography>
+                    <UnitPicker units={attackReady(army)} selected={selections} onChange={(next) => setBattlePicked(prev => new Map(prev).set(keyOfId(id), {army: id, selections: next}))}/>
+                  </Box>
+                );
+              })}
               <Button variant="contained" color="error" size="small" disabled={!ready} sx={{textTransform: "none"}} onClick={handleStartBattle}>
                 Start Battle ({total})
               </Button>
@@ -577,7 +607,7 @@ function App() {
         {canRecruitAtSelected && (
           <Paper elevation={3} sx={{position: "absolute", bottom: 8, left: 8, p: 1.5, ...overlayPaper, display: "flex", flexDirection: "column", gap: 1, width: 340}}>
             <Select size="small" value={unitType} onChange={(e) => setUnitType(e.target.value as DefaultUnitName)} fullWidth>
-              {Object.entries(game.unitStatsMap).map(([name, stats]) => (
+              {Object.entries(state.unitStatsMap).map(([name, stats]) => (
                 <MenuItem key={name} value={name}>{name} (${stats.cost})</MenuItem>
               ))}
             </Select>
@@ -589,8 +619,8 @@ function App() {
               <Button size="small" variant="text" sx={{minWidth: 28, p: 0}} onClick={() => setRecruitCount(Math.min(maxRecruit, recruitCountClamped + 1))}>+</Button>
               <Button
                 variant="contained" size="small" sx={{textTransform: "none", width: 72}}
-                disabled={!currentPlayer.canBuy(unitType, recruitCountClamped)}
-                onClick={() => { gameRef.current.recruitPlayerArmy(unitType, selectedNode!, recruitCountClamped); update(); }}
+                disabled={!api.canBuy(unitType, recruitCountClamped)}
+                onClick={() => { apiRef.current.recruit(unitType, selectedNode!, recruitCountClamped); update(); }}
               >
                 Recruit
               </Button>
@@ -599,17 +629,17 @@ function App() {
         )}
 
         {/* Army management UI */}
-        {ownArmySelected && (
+        {ownArmy && (
           <Paper elevation={3} sx={{position: "absolute", bottom: 8, left: 8, p: 1.5, ...overlayPaper, display: "flex", flexDirection: "column", gap: 1, width: 420}}>
             <Typography variant="body2" sx={{fontWeight: "bold"}}>
-              {selectedArmy.units.length} {selectedArmy.unitType} at {selectedArmy.location}
+              {ownArmy.units.length} {ownArmy.unitType} at {ownArmy.location}
             </Typography>
-            <UnitPicker units={selectedArmy.units} selected={selectedUnits} onChange={setSelectedUnits}/>
+            <UnitPicker units={ownArmy.units} selected={selectedUnits} onChange={setSelectedUnits}/>
             <Box sx={{display: "flex", alignItems: "center", gap: 0.5}}>
               <Typography variant="caption" sx={{flex: 1, color: moveHint.warning ? "#FFB300" : "text.secondary"}}>
                 {moveHint.text}
               </Typography>
-              <Button variant="contained" color="error" size="small" sx={{textTransform: "none", width: 72}} disabled={selectedUnits.size === 0} onClick={handleDisband}>
+              <Button variant="contained" color="error" size="small" sx={{textTransform: "none", width: 72}} disabled={selectedCount === 0} onClick={handleDisband}>
                 Disband
               </Button>
             </Box>
@@ -633,10 +663,10 @@ function App() {
         })()}
 
         {/* Send allocation slider — positioned above target army's node */}
-        {battle && battleAttackArmy && battleAllocTarget && battleRemaining > 0 && (() => {
+        {attackingArmy && battleAllocTarget && battleRemaining > 0 && (() => {
           const pos = getNodeScreenPos(battleAllocTarget.location);
           if (!pos) return null;
-          const needed = battle.getUnitsNeeded(battleAttackArmy, battleAllocTarget);
+          const needed = api.getUnitsNeeded(attackingArmy, battleAllocTarget);
           const sliderMax = Math.min(battleRemaining, needed);
           return (
             <Paper elevation={3} sx={{position: "absolute", left: pos.left, top: pos.top - 90 * pos.scale, transform: "translateX(-50%)", p: 1, ...overlayPaper, width: 280}}>
@@ -655,13 +685,13 @@ function App() {
         })()}
 
         {/* Confirm Attack / Reset — positioned below target node */}
-        {battle && battleAttackArmy && battleAllocations.size > 0 && !battleAllocTarget && (() => {
+        {battle && attackingArmy && battleAllocations.length > 0 && !battleAllocTarget && (() => {
           const pos = getNodeScreenPos(battle.targetLocation);
           if (!pos) return null;
           return (
             <Paper elevation={3} sx={{position: "absolute", left: pos.left, top: pos.top + 45 * pos.scale, transform: "translateX(-50%)", p: 1, ...overlayPaper, display: "flex", gap: 0.5}}>
               <Button variant="contained" size="small" sx={{textTransform: "none"}} onClick={handleBattleConfirm}>Confirm</Button>
-              <Button variant="outlined" size="small" sx={{textTransform: "none"}} onClick={() => { setBattleAllocations(new Map()); setBattleAllocTarget(null); }}>Reset</Button>
+              <Button variant="outlined" size="small" sx={{textTransform: "none"}} onClick={() => { setBattleAllocations([]); setBattleAllocTarget(null); }}>Reset</Button>
             </Paper>
           );
         })()}
@@ -671,9 +701,9 @@ function App() {
           <Paper elevation={2} sx={{position: "absolute", bottom: 8, right: 8, p: 1, ...overlayPaper, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0.5}}>
             <Button variant="outlined" size="small" sx={{textTransform: "none"}} onClick={() => setSaveLoadMode("save")}>Save</Button>
             <Button variant="outlined" size="small" sx={{textTransform: "none"}} onClick={() => setSaveLoadMode("load")}>Load</Button>
-            {game.gameOver ? (
+            {gameOver ? (
               <Button variant="contained" size="small" sx={{textTransform: "none", gridColumn: "1 / -1"}} onClick={() => {
-                gameRef.current = new GameSystem(DefaultConfig);
+                apiRef.current = GameAPI.create(DefaultConfig);
                 setVersion(0);
                 clearSelection();
                 clearBattleAttack();
@@ -687,7 +717,7 @@ function App() {
                   End Turn
                 </Button>
                 <Button variant="outlined" size="small" sx={{textTransform: "none"}} onClick={() => {
-                  gameRef.current = new GameSystem(DefaultConfig);
+                  apiRef.current = GameAPI.create(DefaultConfig);
                   setVersion(0);
                   clearSelection();
                   clearBattleAttack();

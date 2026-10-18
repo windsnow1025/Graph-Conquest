@@ -89,6 +89,13 @@ function sortByHealth<T extends UnitData>(units: T[], ascending: boolean): T[] {
   return [...units].sort((a, b) => (ascending ? a.currentHealth - b.currentHealth : b.currentHealth - a.currentHealth));
 }
 
+type UnitState = Pick<UnitSelection, "currentHealth" | "remainingMoves" | "canAttack">;
+
+/** Whether two units, or a unit and a selection, agree on health, remaining moves and attack readiness. */
+export function sameState(a: UnitState, b: UnitState): boolean {
+  return a.currentHealth === b.currentHealth && a.remainingMoves === b.remainingMoves && a.canAttack === b.canAttack;
+}
+
 /** Units as the API names them: one state and count per state, in order of first appearance. */
 export function selectionsOf(units: UnitData[]): UnitSelection[] {
   const selections = new Map<string, UnitSelection>();

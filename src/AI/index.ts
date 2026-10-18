@@ -1,6 +1,5 @@
-import type GameSystem from "../lib/GameSystem";
-import type Battle from "../lib/Battle";
-import GameAPI from "../lib/GameAPI";
+import type GameAPI from "../lib/GameAPI";
+import type {BattleData} from "../lib/Battle";
 import {executeNNTurnSteps, executeNNDefenderPhase} from "./TurnExecutor";
 import {NNModel} from "./nn/NNModel";
 import {WEB_MODEL_FILE, webModelHandler} from "./nn/WebModel";
@@ -30,26 +29,32 @@ async function loadWebModel(): Promise<NNModel> {
   return model;
 }
 
-export async function aiTurnSteps(game: GameSystem): Promise<Generator<void> | null> {
-  if (game.gameOver || game.currentPlayer.defeated) {
-    game.endTurn();
-    return null;
-  }
-  return executeNNTurnSteps(GameAPI.of(game), await loadModel());
+/** True when the current player cannot play: the game is over or the player is defeated. */
+function cannotPlay(api: GameAPI): boolean {
+  const state = api.getState();
+  return api.isGameOver() || state.players[state.currentPlayerIndex].defeated;
 }
 
-export function greedyTurnStepsUI(game: GameSystem): Generator<void> | null {
-  if (game.gameOver || game.currentPlayer.defeated) {
-    game.endTurn();
+export async function aiTurnSteps(api: GameAPI): Promise<Generator<void> | null> {
+  if (cannotPlay(api)) {
+    api.endTurn();
     return null;
   }
-  return greedyTurnSteps(GameAPI.of(game));
+  return executeNNTurnSteps(api, await loadModel());
 }
 
-export async function aiDefenderPhase(game: GameSystem, battle: Battle, mode: string): Promise<void> {
+export function greedyTurnStepsUI(api: GameAPI): Generator<void> | null {
+  if (cannotPlay(api)) {
+    api.endTurn();
+    return null;
+  }
+  return greedyTurnSteps(api);
+}
+
+export async function aiDefenderPhase(api: GameAPI, battle: BattleData, mode: string): Promise<void> {
   if (mode === "greedy") {
-    greedyDefenderPhase(GameAPI.of(game), battle);
+    greedyDefenderPhase(api, battle);
   } else {
-    executeNNDefenderPhase(GameAPI.of(game), await loadModel(), battle);
+    executeNNDefenderPhase(api, await loadModel(), battle);
   }
 }
